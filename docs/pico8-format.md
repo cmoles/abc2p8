@@ -30,7 +30,7 @@ Each pair of notes occupies exactly 5 bytes (40 bits = 10 nybbles). Notes are NO
 
 | Nybble | Bits | Field                                              |
 | ------ | ---- | -------------------------------------------------- |
-| 0–1    | 8    | Pitch, 0–63 (only low 6 bits used). 0 = C0, 63 = D♯5 |
+| 0–1    | 8    | Pitch, 0–63 (only low 6 bits used). 0 = C2, 63 = D♯7 (Pico-8 editor notation; the range spans 64 semitones / 5⅓ octaves) |
 | 2      | 4    | Waveform / instrument, 0–F                         |
 | 3      | 4    | Volume, 0–7 (top bit unused)                       |
 | 4      | 4    | Effect, 0–7 (top bit unused)                       |
@@ -112,8 +112,8 @@ decodes as:
 | 1      | `0c` | speed = 12                                             |
 | 2      | `00` | loop start = 0                                         |
 | 3      | `00` | loop end = 0 (no loop)                                 |
-| Note 0 | `28050` | pitch=0x28=40 (E3), waveform=0 (sine), vol=5, effect=0 |
-| Note 1 | `2a050` | pitch=0x2a=42 (F♯3), waveform=0, vol=5, effect=0    |
+| Note 0 | `28050` | pitch=0x28=40 (E5), waveform=0 (sine), vol=5, effect=0 |
+| Note 1 | `2a050` | pitch=0x2a=42 (F♯5), waveform=0, vol=5, effect=0    |
 
 ---
 
@@ -153,16 +153,16 @@ A pattern with all four channels silent is the empty/default pattern and is norm
 ### Worked example
 
 ```
-01 00014142
+01 00014243
 ```
 
 - Flag byte `01` → begin-loop set; end-loop and stop clear.
 - Channel 0 plays sfx `00`.
 - Channel 1 plays sfx `01`.
-- Channel 2 silent (`0x41` = 0x40 | 1; in-memory the channel-1 silent marker is reused here — see the note below).
-- Channel 3 silent (`0x42` = 0x40 | 2).
+- Channel 2 silent (`0x42` = 0x40 | 2).
+- Channel 3 silent (`0x43` = 0x40 | 3).
 
-> Note: there is some inconsistency in third-party documentation about which silent value goes in which channel. In practice in real `.p8` carts, a silent channel `n` is stored as exactly `0x40 | n`. A robust parser should treat any byte with bit 6 set as "silent" and ignore the low bits.
+> Note: emitters should write a silent channel `n` as exactly `0x40 | n`. Parsers should treat any byte with bit 6 set as "silent" and ignore the low bits, since some third-party tools have written variant values.
 
 ---
 
