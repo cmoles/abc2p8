@@ -96,4 +96,72 @@ describe('abcToPico8 — slice 1', () => {
     // After +1 octave: pitch 0 (C2). Hex 00.
     expect(line.slice(8, 13)).toBe('00050');
   });
+
+  it('chooses an eighth-note slot for dotted rhythm and lays note repeats', () => {
+    // C3 D E4 in L:1/8 = dotted-quarter, eighth, half. GCD durations = eighth.
+    // Slot = eighth at 120 BPM → 30 pico-8 ticks (hex 1e).
+    const result = abcToPico8(fixture('dotted-rhythm.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect(line.slice(0, 8)).toBe('011e0000');
+
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    // C×3, D×1, E×4 = 8 occupied slots.
+    expect([0, 1, 2].map(slot)).toEqual(['18050', '18050', '18050']);
+    expect(slot(3)).toBe('1a050');
+    expect([4, 5, 6, 7].map(slot)).toEqual(['1c050', '1c050', '1c050', '1c050']);
+    expect(slot(8)).toBe('00000');
+  });
+
+  it('merges tied notes (including across barlines) into a single sustained note', () => {
+    // C2- | C  D2 → tie merges C2 (96 ticks) + C (48 ticks) into 144 ticks.
+    // GCD(144, 96) = quarter (48 ticks). 3 C-slots, then 2 D-slots.
+    const result = abcToPico8(fixture('tied-notes.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect(line.slice(0, 8)).toBe('013c0000');
+
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    expect([0, 1, 2].map(slot)).toEqual(['18050', '18050', '18050']);
+    expect([3, 4].map(slot)).toEqual(['1a050', '1a050']);
+    expect(slot(5)).toBe('00000');
+  });
+
+  it('translates non-default tempo into pico-8 speed', () => {
+    // Q:1/4=240, quarter-note slot → 30 pico-8 ticks (hex 1e), half the default.
+    const result = abcToPico8(fixture('tempo-fast.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect(line.slice(0, 8)).toBe('011e0000');
+
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    expect([0, 1, 2, 3].map(slot)).toEqual(['18050', '1a050', '1c050', '1d050']);
+  });
+
+  it('rounds non-integer pico-8 speed and emits a TEMPO_ROUNDED diagnostic', () => {
+    // Q:1/4=140 with quarter slot → rawSpeed ≈ 51.43 → rounds to 51 (hex 33).
+    const result = abcToPico8(fixture('tempo-rounding.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'info' && d.code === 'TEMPO_ROUNDED',
+      ),
+    ).toBe(true);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect(line.slice(0, 8)).toBe('01330000');
+  });
+
+  it('emits silent slots (volume=0) for rests', () => {
+    // C z D z → pitch, silent, pitch, silent.
+    const result = abcToPico8(fixture('rests.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    expect([0, 1, 2, 3].map(slot)).toEqual(['18050', '00000', '1a050', '00000']);
+  });
 });
