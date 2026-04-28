@@ -10,7 +10,7 @@ Converts ABC notation → Pico-8 `__music__`/`__sfx__` cart format.
 
 ## Pico-8 constraints
 - 4 mono channels, 8 waveforms, 32-note SFX slots
-- Pitch range C0–D#7
+- Pitch range C2–D#7 (Pico-8 editor notation; 64 semitones)
 - See docs/[pico8-format.md](http://pico8-format.md) for full reference
 
 ## Conventions
