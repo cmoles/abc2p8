@@ -10,24 +10,22 @@ the acceptance fixture of the next.
 - Single voice, no chords, ≤32 notes (one SFX slot).
 - Trivial `__music__` section pointing at slot 0.
 - Audition CLI with `--play` stub.
-- Guard rails enforced in `src/abc/toIR.ts:109,175`,
-  `src/pipeline/quantize.ts:112`, `src/pico8/emit.ts:32`.
+- Guard rails enforced in `src/abc/toIR.ts` (multi-voice, chord) and
+  `src/pico8/emit.ts` (single channel).
 
-## Slice 2 — Long monophonic tunes
+## Slice 2 — Long monophonic tunes (shipped)
 
-**Goal:** lift the 32-note ceiling so real tunes fit.
-
-- Quantizer splits a single voice across multiple SFX slots.
-- Emitter chains slots via a `__music__` pattern sequence (one channel, three
-  silent).
-- Loop point handling: ABC repeat bars (`|:` `:|`) → music loop flags (see
-  `docs/pico8-format.md`).
-- Removes guard at `src/pipeline/quantize.ts:112`.
-
-**Open questions**
-- How do we pick SFX speed when sub-tune sections want different note lengths?
-  Probably one speed per tune; warn on truncation.
-- Slot budget — error vs. warn when a tune exceeds 64 SFX slots.
+- Quantizer chunks a single voice into ≤32-slot SFX blocks with forced
+  boundaries at loop points.
+- Emitter writes one SFX line per block and chains them via `__music__`
+  patterns (channel 0 used, others silent).
+- ABC repeat bars (`|:` `:|`, `::`) → Pico-8 begin/end-loop flags. Implicit
+  `|:` at the start when only `:|` is present. Multiple repeat regions warn
+  and keep the first; orphan `|:` warns and is dropped.
+- Content after `:|` is dropped with `CONTENT_AFTER_REPEAT` (Pico-8 loop is
+  indefinite).
+- Slot budget is enforced: a tune needing more than 64 SFX slots errors with
+  `SFX_BUDGET_EXCEEDED`.
 
 ## Slice 3 — Multi-voice polyphony
 
@@ -38,7 +36,8 @@ the acceptance fixture of the next.
   per channel.
 - Voice-to-channel mapping (deterministic by ABC voice order; CLI flag to
   override).
-- Removes guards at `src/abc/toIR.ts:109` and `src/pico8/emit.ts:32`.
+- Removes the multi-voice guard in `src/abc/toIR.ts` and the single-channel
+  guard in `src/pico8/emit.ts`.
 
 **Open questions**
 - Different voices may want different note-length grids. Pick the LCM, or
@@ -53,7 +52,7 @@ the acceptance fixture of the next.
 - toIR accepts ABC chords (`[CEG]`), expands them onto sibling channels
   borrowed from the unused channel pool.
 - Channel-budget diagnostics: warn/error when chord arity + voice count > 4.
-- Removes guard at `src/abc/toIR.ts:175`.
+- Removes the chord guard in `src/abc/toIR.ts`.
 
 **Open questions**
 - Voicing priority when over-budget — drop the lowest note? The highest?

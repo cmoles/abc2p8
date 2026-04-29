@@ -2,10 +2,11 @@ import type {
   KeySignature,
   TuneObject,
   VoiceItem,
+  VoiceItemBar,
   VoiceItemNote,
 } from 'abcjs';
 import type { Diagnostics } from '../ir/diagnostics.js';
-import type { Note, Score, Voice } from '../ir/types.js';
+import type { Note, RepeatRegion, Score, Voice } from '../ir/types.js';
 
 export const TICKS_PER_QUARTER = 48;
 
@@ -122,10 +123,21 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
   const notes: Note[] = [];
   let cursor = 0;
   let pendingTie: Note | null = null;
+  let repeatStart: number | null = null;
+  let repeatEnd: number | null = null;
+  let extraRepeatWarned = false;
 
   for (const item of items) {
     if (item.el_type === 'bar') {
       ctx.measureAccidentals.clear();
+      ({ repeatStart, repeatEnd, extraRepeatWarned } = handleRepeatBar(
+        item,
+        cursor,
+        repeatStart,
+        repeatEnd,
+        extraRepeatWarned,
+        diagnostics,
+      ));
       continue;
     }
     if (item.el_type === 'key') {
@@ -203,6 +215,8 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
     ? ([meter.value[0].num, meter.value[0].den ?? 4] as [number, number])
     : undefined;
 
+  const repeat = finalizeRepeatRegion(repeatStart, repeatEnd, cursor, diagnostics);
+
   return {
     ticksPerQuarter: TICKS_PER_QUARTER,
     tempoBpm,
@@ -213,7 +227,94 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
       keySignature: firstStaff.key?.root,
       timeSignature,
     },
+    ...(repeat ? { repeat } : {}),
   };
+}
+
+interface RepeatState {
+  repeatStart: number | null;
+  repeatEnd: number | null;
+  extraRepeatWarned: boolean;
+}
+
+function handleRepeatBar(
+  bar: VoiceItemBar,
+  cursor: number,
+  repeatStart: number | null,
+  repeatEnd: number | null,
+  extraRepeatWarned: boolean,
+  diagnostics: Diagnostics,
+): RepeatState {
+  const isLeft = bar.type === 'bar_left_repeat' || bar.type === 'bar_dbl_repeat';
+  const isRight = bar.type === 'bar_right_repeat' || bar.type === 'bar_dbl_repeat';
+  if (!isLeft && !isRight) {
+    return { repeatStart, repeatEnd, extraRepeatWarned };
+  }
+
+  let warned = extraRepeatWarned;
+  const warnExtra = (): void => {
+    if (warned) return;
+    diagnostics.warn(
+      'toIR',
+      'MULTIPLE_REPEATS',
+      'Multiple repeat regions found; only the first |: … :| pair is preserved.',
+    );
+    warned = true;
+  };
+
+  let nextStart = repeatStart;
+  let nextEnd = repeatEnd;
+
+  if (isRight) {
+    if (nextEnd !== null) {
+      warnExtra();
+    } else {
+      nextEnd = cursor;
+      if (nextStart === null) nextStart = 0;
+    }
+  }
+  if (isLeft) {
+    if (nextStart !== null && nextEnd !== null) {
+      warnExtra();
+    } else if (nextStart === null) {
+      nextStart = cursor;
+    } else {
+      // |: appeared twice without an intervening :| — keep the first.
+      warnExtra();
+    }
+  }
+
+  return { repeatStart: nextStart, repeatEnd: nextEnd, extraRepeatWarned: warned };
+}
+
+function finalizeRepeatRegion(
+  repeatStart: number | null,
+  repeatEnd: number | null,
+  totalTicks: number,
+  diagnostics: Diagnostics,
+): RepeatRegion | null {
+  if (repeatStart === null && repeatEnd === null) return null;
+  if (repeatEnd === null) {
+    diagnostics.warn(
+      'toIR',
+      'INCOMPLETE_REPEAT',
+      '|: found without matching :|; repeat dropped.',
+    );
+    return null;
+  }
+  const start = repeatStart ?? 0;
+  if (repeatEnd <= start) {
+    diagnostics.warn(
+      'toIR',
+      'EMPTY_REPEAT',
+      'Repeat region has zero or negative length; dropped.',
+    );
+    return null;
+  }
+  if (repeatEnd > totalTicks) {
+    return { startTick: start, endTick: totalTicks };
+  }
+  return { startTick: start, endTick: repeatEnd };
 }
 
 function collectVoices(tune: TuneObject): VoiceItem[][] {

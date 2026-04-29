@@ -31,9 +31,15 @@ export interface ScoreMeta {
   timeSignature?: [number, number];
 }
 
+export interface RepeatRegion {
+  startTick: number;
+  endTick: number;
+}
+
 export interface Score {
   ticksPerQuarter: number;
   tempoBpm: number;
   voices: Voice[];
   meta: ScoreMeta;
+  repeat?: RepeatRegion;
 }

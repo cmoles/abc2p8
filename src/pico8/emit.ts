@@ -1,10 +1,11 @@
 import type { Diagnostics } from '../ir/diagnostics.js';
-import type { QuantizedScore, QuantizedSlot } from '../pipeline/quantize.js';
+import type { QuantizedScore, QuantizedSlot, QuantizedVoice } from '../pipeline/quantize.js';
 import {
   DEFAULT_EFFECT,
   PICO8_MIDI_OFFSET,
   PICO8_PITCH_MAX,
   PICO8_PITCH_MIN,
+  SFX_NOTES_PER_SLOT,
 } from './constraints.js';
 import {
   defaultEditorByte,
@@ -25,17 +26,34 @@ export function emit(
   diagnostics: Diagnostics,
   opts: EmitOptions,
 ): string | null {
-  if (q.slotsPerVoice.length !== 1) {
+  if (q.voices.length !== 1) {
     diagnostics.error(
       'emit',
       'CHANNEL_ALLOCATION_UNSUPPORTED',
-      `Slice 1 emits a single channel; got ${q.slotsPerVoice.length} voices.`,
+      `Slice 2 emits a single channel; got ${q.voices.length} voices.`,
     );
     return null;
   }
-  const slots = q.slotsPerVoice[0]!;
-  const voiceId = q.voiceIds[0]!;
+  const voice = q.voices[0]!;
 
+  const sfxLines: string[] = [];
+  for (let i = 0; i < voice.blocks.length; i += 1) {
+    const line = emitSfxLine(voice.blocks[i]!, voice.id, q.speed, diagnostics, opts);
+    if (line === null) return null;
+    sfxLines.push(line);
+  }
+
+  const musicLines = emitMusicLines(voice);
+  return emptyCart(sfxLines, musicLines);
+}
+
+function emitSfxLine(
+  slots: QuantizedSlot[],
+  voiceId: string,
+  speed: number,
+  diagnostics: Diagnostics,
+  opts: EmitOptions,
+): string | null {
   const notes: Pico8Note[] = [];
   for (const slot of slots) {
     const pitch = pitchForSlot(slot, diagnostics, voiceId);
@@ -52,23 +70,52 @@ export function emit(
     }
   }
 
+  // Pico-8 0.2.2+ feature: with loop_end=0, loop_start acts as the SFX length
+  // (otherwise pico-8 plays the silent tail of a short SFX before advancing).
+  const truncatedLength = notes.length < SFX_NOTES_PER_SLOT ? notes.length : 0;
   const sfx: Pico8Sfx = {
     editorByte: defaultEditorByte(),
-    speed: q.speed,
-    loopStart: 0,
+    speed,
+    loopStart: truncatedLength,
     loopEnd: 0,
     notes,
   };
+  return encodeSfxLine(sfx);
+}
 
-  const sfxLine = encodeSfxLine(sfx);
-  const musicLine = encodeMusicLine({
-    beginLoop: false,
-    endLoop: false,
-    stop: true,
-    channels: [0, 'silent', 'silent', 'silent'],
-  });
-
-  return emptyCart([sfxLine], [musicLine]);
+function emitMusicLines(voice: QuantizedVoice): string[] {
+  const lines: string[] = [];
+  const lastIndex = voice.blocks.length - 1;
+  const loop = voice.loop;
+  // Pico-8's loop_end search excludes the current pattern, so begin+end on the
+  // same pattern doesn't self-loop. When the loop region collapses to one
+  // block, emit a duplicate music pattern referencing the same SFX so begin
+  // and end land on different patterns.
+  const expandSelfLoop = !!loop && loop.beginBlock === loop.endBlock;
+  for (let i = 0; i < voice.blocks.length; i += 1) {
+    const beginLoop = !!loop && i === loop.beginBlock;
+    const endLoop = !!loop && i === loop.endBlock && !expandSelfLoop;
+    const stop = !loop && i === lastIndex;
+    lines.push(
+      encodeMusicLine({
+        beginLoop,
+        endLoop,
+        stop,
+        channels: [i, 'silent', 'silent', 'silent'],
+      }),
+    );
+  }
+  if (expandSelfLoop && loop) {
+    lines.push(
+      encodeMusicLine({
+        beginLoop: false,
+        endLoop: true,
+        stop: false,
+        channels: [loop.beginBlock, 'silent', 'silent', 'silent'],
+      }),
+    );
+  }
+  return lines;
 }
 
 function pitchForSlot(
