@@ -16,6 +16,7 @@ export interface Note {
   instrument?: number;
   effect?: Effect;
   tiedToNext?: boolean;
+  staccato?: boolean;
 }
 
 export interface Voice {

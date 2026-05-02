@@ -91,6 +91,8 @@ function pitchToMidi(p: PitchObj, ctx: ConvertContext): number {
   return base + delta;
 }
 
+export const MAX_VOICES = 4;
+
 export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | null {
   const firstStaff = tune.lines.find((l) => l.staff && l.staff.length > 0)?.staff?.[0];
   if (!firstStaff) {
@@ -103,23 +105,85 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
     diagnostics.error('toIR', 'NO_VOICES', 'Tune has no voice content.');
     return null;
   }
-  if (allVoices.length > 1) {
+  if (allVoices.length > MAX_VOICES) {
     diagnostics.error(
       'toIR',
-      'MULTI_VOICE_UNSUPPORTED',
-      `Tune has ${allVoices.length} voices; slice 1 supports a single voice.`,
+      'TOO_MANY_VOICES',
+      `Tune has ${allVoices.length} voices; pico-8 has only ${MAX_VOICES} channels.`,
     );
     return null;
   }
 
+  const tempoBpm = resolveQuarterBpm(tune, diagnostics);
+
+  const converted: VoiceConvertResult[] = [];
+  for (let i = 0; i < allVoices.length; i += 1) {
+    const id = `V${i + 1}`;
+    const result = convertVoiceItems(allVoices[i]!, firstStaff.key, id, diagnostics);
+    if (!result) return null;
+    converted.push(result);
+  }
+
+  const scoreRepeat = converted[0]!.repeat;
+  for (let i = 1; i < converted.length; i += 1) {
+    const r = converted[i]!.repeat;
+    const same =
+      (r === null && scoreRepeat === null) ||
+      (r !== null &&
+        scoreRepeat !== null &&
+        r.startTick === scoreRepeat.startTick &&
+        r.endTick === scoreRepeat.endTick);
+    if (!same) {
+      diagnostics.warn(
+        'toIR',
+        'VOICE_REPEAT_MISMATCH',
+        `Voice V${i + 1} has different repeat bounds than V1; using V1's bounds.`,
+        { voice: `V${i + 1}` },
+      );
+    }
+  }
+
+  const voices: Voice[] = converted.map((c, i) => ({
+    id: `V${i + 1}`,
+    notes: c.notes,
+  }));
+
+  const meter = firstStaff.meter;
+  const timeSignature = meter?.value?.[0]
+    ? ([meter.value[0].num, meter.value[0].den ?? 4] as [number, number])
+    : undefined;
+
+  return {
+    ticksPerQuarter: TICKS_PER_QUARTER,
+    tempoBpm,
+    voices,
+    meta: {
+      title: tune.metaText?.title,
+      composer: tune.metaText?.composer,
+      keySignature: firstStaff.key?.root,
+      timeSignature,
+    },
+    ...(scoreRepeat ? { repeat: scoreRepeat } : {}),
+  };
+}
+
+interface VoiceConvertResult {
+  notes: Note[];
+  repeat: RepeatRegion | null;
+}
+
+function convertVoiceItems(
+  items: VoiceItem[],
+  key: KeySignature | undefined,
+  voiceId: string,
+  diagnostics: Diagnostics,
+): VoiceConvertResult | null {
   const ctx: ConvertContext = {
     diagnostics,
-    keyMap: keySignatureMap(firstStaff.key),
+    keyMap: keySignatureMap(key),
     measureAccidentals: new Map(),
   };
 
-  const tempoBpm = resolveQuarterBpm(tune, diagnostics);
-  const items = allVoices[0]!;
   const notes: Note[] = [];
   let cursor = 0;
   let pendingTie: Note | null = null;
@@ -136,6 +200,7 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
         repeatStart,
         repeatEnd,
         extraRepeatWarned,
+        voiceId,
         diagnostics,
       ));
       continue;
@@ -143,7 +208,7 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
     if (item.el_type === 'key') {
       ctx.keyMap = keySignatureMap(item);
       ctx.measureAccidentals.clear();
-      diagnostics.info('toIR', 'KEY_CHANGE', 'Mid-tune key change applied.');
+      diagnostics.info('toIR', 'KEY_CHANGE', 'Mid-tune key change applied.', { voice: voiceId });
       continue;
     }
     if (item.el_type === 'meter') {
@@ -151,6 +216,7 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
         'toIR',
         'METER_CHANGE_IGNORED',
         'Mid-tune meter change ignored; pico-8 has no meter concept.',
+        { voice: voiceId },
       );
       continue;
     }
@@ -159,6 +225,7 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
         'toIR',
         'TEMPO_CHANGE_IGNORED',
         'Mid-tune tempo change ignored; pico-8 SFX speed is set once per slot.',
+        { voice: voiceId },
       );
       continue;
     }
@@ -166,7 +233,7 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
       continue;
     }
     if (!isVoiceItemNote(item)) {
-      diagnoseDroppedItem(item, diagnostics);
+      diagnoseDroppedItem(item, voiceId, diagnostics);
       continue;
     }
 
@@ -176,11 +243,12 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
         'toIR',
         'ZERO_DURATION',
         'Skipped voice item with zero duration.',
+        { voice: voiceId },
       );
       continue;
     }
 
-    diagnoseNoteOrnaments(item, diagnostics);
+    diagnoseNoteOrnaments(item, voiceId, diagnostics);
 
     if (item.rest) {
       pendingTie = null;
@@ -191,23 +259,28 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
 
     const pitches = (item.pitches ?? []) as PitchObj[];
     if (pitches.length === 0) {
-      diagnostics.info('toIR', 'EMPTY_NOTE', 'Note item has no pitches; skipped.');
+      diagnostics.info('toIR', 'EMPTY_NOTE', 'Note item has no pitches; skipped.', {
+        voice: voiceId,
+      });
       continue;
     }
     if (pitches.length > 1) {
       diagnostics.error(
         'toIR',
         'CHORD_UNSUPPORTED',
-        `Chord with ${pitches.length} notes; slice 1 supports monophonic input only.`,
+        `Chord with ${pitches.length} notes; slice 3 supports monophonic voices only.`,
+        { voice: voiceId },
       );
       return null;
     }
 
     const midi = pitchToMidi(pitches[0]!, ctx);
     const note: Note = { startTick: cursor, durationTick: durationTicks, pitch: midi };
+    if (hasStaccato(item)) note.staccato = true;
 
     if (pendingTie && pendingTie.pitch === midi) {
       pendingTie.durationTick += durationTicks;
+      if (note.staccato) pendingTie.staccato = true;
     } else {
       notes.push(note);
     }
@@ -223,26 +296,8 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
     }
   }
 
-  const voice: Voice = { id: 'V1', notes };
-  const meter = firstStaff.meter;
-  const timeSignature = meter?.value?.[0]
-    ? ([meter.value[0].num, meter.value[0].den ?? 4] as [number, number])
-    : undefined;
-
-  const repeat = finalizeRepeatRegion(repeatStart, repeatEnd, cursor, diagnostics);
-
-  return {
-    ticksPerQuarter: TICKS_PER_QUARTER,
-    tempoBpm,
-    voices: [voice],
-    meta: {
-      title: tune.metaText?.title,
-      composer: tune.metaText?.composer,
-      keySignature: firstStaff.key?.root,
-      timeSignature,
-    },
-    ...(repeat ? { repeat } : {}),
-  };
+  const repeat = finalizeRepeatRegion(repeatStart, repeatEnd, cursor, voiceId, diagnostics);
+  return { notes, repeat };
 }
 
 interface RepeatState {
@@ -257,6 +312,7 @@ function handleRepeatBar(
   repeatStart: number | null,
   repeatEnd: number | null,
   extraRepeatWarned: boolean,
+  voiceId: string,
   diagnostics: Diagnostics,
 ): RepeatState {
   const isLeft = bar.type === 'bar_left_repeat' || bar.type === 'bar_dbl_repeat';
@@ -272,6 +328,7 @@ function handleRepeatBar(
       'toIR',
       'MULTIPLE_REPEATS',
       'Multiple repeat regions found; only the first |: … :| pair is preserved.',
+      { voice: voiceId },
     );
     warned = true;
   };
@@ -305,6 +362,7 @@ function finalizeRepeatRegion(
   repeatStart: number | null,
   repeatEnd: number | null,
   totalTicks: number,
+  voiceId: string,
   diagnostics: Diagnostics,
 ): RepeatRegion | null {
   if (repeatStart === null && repeatEnd === null) return null;
@@ -313,6 +371,7 @@ function finalizeRepeatRegion(
       'toIR',
       'INCOMPLETE_REPEAT',
       '|: found without matching :|; repeat dropped.',
+      { voice: voiceId },
     );
     return null;
   }
@@ -322,6 +381,7 @@ function finalizeRepeatRegion(
       'toIR',
       'EMPTY_REPEAT',
       'Repeat region has zero or negative length; dropped.',
+      { voice: voiceId },
     );
     return null;
   }
@@ -332,35 +392,32 @@ function finalizeRepeatRegion(
 }
 
 function collectVoices(tune: TuneObject): VoiceItem[][] {
-  // Slice 1: assume the tune has at most one logical voice that may be split
-  // across lines; concatenate all voice arrays from each line/staff in order.
-  const merged: VoiceItem[] = [];
-  let voiceCount = 0;
-  for (const line of tune.lines) {
-    if (!line.staff) continue;
-    for (const staff of line.staff) {
-      if (!staff.voices) continue;
-      voiceCount = Math.max(voiceCount, staff.voices.length);
-      for (const v of staff.voices[0] ?? []) merged.push(v);
-    }
-  }
-  if (voiceCount === 0) return [];
-  if (voiceCount > 1) {
-    return Array.from({ length: voiceCount }, (_, i) => collectVoiceIndex(tune, i));
-  }
-  return [merged];
-}
+  // ABC voices may be laid out either as multiple voices within one staff
+  // (V: with overlay) or as one voice per staff (the common multi-`V:` case;
+  // abcjs gives each V: declaration its own staff). Accumulate items by the
+  // (staffIndex, voiceIndex) coordinate so a logical voice that spans lines
+  // gets concatenated.
+  const voicesByCoord = new Map<string, VoiceItem[]>();
+  const order: string[] = [];
 
-function collectVoiceIndex(tune: TuneObject, index: number): VoiceItem[] {
-  const out: VoiceItem[] = [];
   for (const line of tune.lines) {
     if (!line.staff) continue;
-    for (const staff of line.staff) {
+    for (let si = 0; si < line.staff.length; si += 1) {
+      const staff = line.staff[si]!;
       if (!staff.voices) continue;
-      for (const v of staff.voices[index] ?? []) out.push(v);
+      for (let vi = 0; vi < staff.voices.length; vi += 1) {
+        const key = `${si}:${vi}`;
+        let bucket = voicesByCoord.get(key);
+        if (!bucket) {
+          bucket = [];
+          voicesByCoord.set(key, bucket);
+          order.push(key);
+        }
+        for (const item of staff.voices[vi] ?? []) bucket.push(item);
+      }
     }
   }
-  return out;
+  return order.map((k) => voicesByCoord.get(k)!);
 }
 
 function resolveQuarterBpm(tune: TuneObject, diagnostics: Diagnostics): number {
@@ -376,16 +433,22 @@ function resolveQuarterBpm(tune: TuneObject, diagnostics: Diagnostics): number {
   return quarterBpm;
 }
 
-function diagnoseDroppedItem(item: VoiceItem, diagnostics: Diagnostics): void {
+function diagnoseDroppedItem(
+  item: VoiceItem,
+  voiceId: string,
+  diagnostics: Diagnostics,
+): void {
+  const loc = { voice: voiceId };
   switch (item.el_type) {
     case 'gap':
-      diagnostics.info('toIR', 'GAP_IGNORED', 'Voice gap (visual spacing) ignored.');
+      diagnostics.info('toIR', 'GAP_IGNORED', 'Voice gap (visual spacing) ignored.', loc);
       return;
     case 'midi':
       diagnostics.info(
         'toIR',
         'MIDI_DIRECTIVE_IGNORED',
         '%%MIDI directive ignored; instrument selection is not yet wired through.',
+        loc,
       );
       return;
     case 'overlay':
@@ -393,6 +456,7 @@ function diagnoseDroppedItem(item: VoiceItem, diagnostics: Diagnostics): void {
         'toIR',
         'OVERLAY_IGNORED',
         'Voice overlay (& syntax) dropped; the overlaid notes will not be heard.',
+        loc,
       );
       return;
     case 'part':
@@ -400,22 +464,39 @@ function diagnoseDroppedItem(item: VoiceItem, diagnostics: Diagnostics): void {
         'toIR',
         'PART_DIRECTIVE_IGNORED',
         'P: part marker ignored; abc2p8 does not yet expand part orderings.',
+        loc,
       );
       return;
     case 'scale':
-      diagnostics.info('toIR', 'SCALE_DIRECTIVE_IGNORED', 'Scale directive ignored (visual only).');
+      diagnostics.info(
+        'toIR',
+        'SCALE_DIRECTIVE_IGNORED',
+        'Scale directive ignored (visual only).',
+        loc,
+      );
       return;
     case 'stem':
-      diagnostics.info('toIR', 'STEM_DIRECTIVE_IGNORED', 'Stem directive ignored (visual only).');
+      diagnostics.info(
+        'toIR',
+        'STEM_DIRECTIVE_IGNORED',
+        'Stem directive ignored (visual only).',
+        loc,
+      );
       return;
     case 'style':
-      diagnostics.info('toIR', 'STYLE_DIRECTIVE_IGNORED', 'Style directive ignored (visual only).');
+      diagnostics.info(
+        'toIR',
+        'STYLE_DIRECTIVE_IGNORED',
+        'Style directive ignored (visual only).',
+        loc,
+      );
       return;
     case 'transpose':
       diagnostics.warn(
         'toIR',
         'TRANSPOSE_IGNORED',
         'Transpose directive ignored; pitches will not be shifted.',
+        loc,
       );
       return;
     default:
@@ -423,6 +504,7 @@ function diagnoseDroppedItem(item: VoiceItem, diagnostics: Diagnostics): void {
         'toIR',
         'DROPPED_ITEM',
         `Dropped voice item of unrecognized type "${item.el_type}".`,
+        loc,
       );
   }
 }
@@ -432,22 +514,36 @@ interface NoteOrnaments {
   gracenotes?: unknown[];
 }
 
-function diagnoseNoteOrnaments(item: VoiceItemNote, diagnostics: Diagnostics): void {
+function diagnoseNoteOrnaments(
+  item: VoiceItemNote,
+  voiceId: string,
+  diagnostics: Diagnostics,
+): void {
   const ornaments = item as unknown as NoteOrnaments;
-  if (ornaments.decoration && ornaments.decoration.length > 0) {
-    diagnostics.warn(
-      'toIR',
-      'DECORATION_DROPPED',
-      `Note decoration(s) dropped: ${ornaments.decoration.join(', ')}.`,
-    );
+  if (ornaments.decoration) {
+    const dropped = ornaments.decoration.filter((d) => d !== 'staccato');
+    if (dropped.length > 0) {
+      diagnostics.warn(
+        'toIR',
+        'DECORATION_DROPPED',
+        `Note decoration(s) dropped: ${dropped.join(', ')}.`,
+        { voice: voiceId },
+      );
+    }
   }
   if (ornaments.gracenotes && ornaments.gracenotes.length > 0) {
     diagnostics.warn(
       'toIR',
       'GRACE_NOTES_DROPPED',
       `${ornaments.gracenotes.length} grace note(s) dropped.`,
+      { voice: voiceId },
     );
   }
+}
+
+function hasStaccato(item: VoiceItemNote): boolean {
+  const ornaments = item as unknown as NoteOrnaments;
+  return !!ornaments.decoration?.includes('staccato');
 }
 
 function noteHasTie(item: VoiceItemNote): boolean {

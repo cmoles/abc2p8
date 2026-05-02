@@ -195,14 +195,21 @@ describe('abcToPico8 — slice 2', () => {
     expect(slot(sfx[0]!, 31)).toBe('1a050');
 
     // Block 1: 2× half-note C3 (hex 0c), 2× half-note G3 (hex 13),
-    // then 2× half E3 (hex 10), 2× half C3.
+    // then 2× half E3 (hex 10), 2× half C3. Each half-note is two slots of
+    // the same pitch; the second onset within a same-pitch run carries the
+    // fade-in retrigger flag (e=4 → trailing nybble "4") so pico-8 doesn't
+    // merge the two halves into one sustained tone.
     expect([0, 1, 2, 3].map((i) => slot(sfx[1]!, i))).toEqual([
-      '0c050', '0c050', '0c050', '0c050',
+      '0c050', '0c050', '0c054', '0c050',
     ]);
     expect([4, 5, 6, 7].map((i) => slot(sfx[1]!, i))).toEqual([
-      '13050', '13050', '13050', '13050',
+      '13050', '13050', '13054', '13050',
     ]);
-    expect(slot(sfx[1]!, 15)).toBe('0c050');
+    // Last 4 slots: E onset+cont, then C onset (pitch change → no retrigger
+    // needed) and same-pitch C continuation+retrigger.
+    expect([12, 13, 14, 15].map((i) => slot(sfx[1]!, i))).toEqual([
+      '0c050', '0c050', '0c054', '0c050',
+    ]);
     expect(slot(sfx[1]!, 16)).toBe('00000');
 
     // Pattern 0 chains forward; pattern 1 stops.
@@ -219,15 +226,13 @@ describe('abcToPico8 — slice 2', () => {
     const sfx = extractSection(result.p8, '__sfx__');
     const music = extractSection(result.p8, '__music__');
     expect(sfx).toHaveLength(2);
-    // Single-block loop expands to 2 patterns (begin + end on the same SFX);
-    // total = 1 intro + 2 loop = 3 patterns.
-    expect(music).toHaveLength(3);
+    // Single-block loop self-loops with one pattern carrying both begin and
+    // end flags (0x03). Total = 1 intro + 1 loop = 2 patterns.
+    expect(music).toHaveLength(2);
 
-    // Intro: no flags. Loop body: begin (flag=1). Loop end-marker: end (flag=2),
-    // re-references the loop body's SFX so playback stays on the same content.
+    // Intro: no flags. Loop body: begin|end (flag=3) on the same SFX.
     expect(music[0]).toBe('00 00414243');
-    expect(music[1]).toBe('01 01414243');
-    expect(music[2]).toBe('02 01414243');
+    expect(music[1]).toBe('03 01414243');
 
     const slot = (line: string, i: number): string =>
       line.slice(8 + i * 5, 8 + (i + 1) * 5);
@@ -274,10 +279,9 @@ describe('abcToPico8 — slice 2', () => {
     const sfx = extractSection(result.p8, '__sfx__');
     const music = extractSection(result.p8, '__music__');
     expect(sfx).toHaveLength(1);
-    // Self-loop expands to begin pattern + duplicate end pattern (same SFX).
-    expect(music).toHaveLength(2);
-    expect(music[0]).toBe('01 00414243');
-    expect(music[1]).toBe('02 00414243');
+    // Whole-tune self-loop is one pattern with begin|end flags (0x03).
+    expect(music).toHaveLength(1);
+    expect(music[0]).toBe('03 00414243');
   });
 
   it('infers an implicit |: at the tune start when only :| is present', () => {
@@ -286,9 +290,8 @@ describe('abcToPico8 — slice 2', () => {
     const result = abcToPico8(abc);
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const music = extractSection(result.p8, '__music__');
-    expect(music).toHaveLength(2);
-    expect(music[0]).toBe('01 00414243');
-    expect(music[1]).toBe('02 00414243');
+    expect(music).toHaveLength(1);
+    expect(music[0]).toBe('03 00414243');
   });
 
   it('warns and keeps the first repeat region when the tune contains multiple', () => {
@@ -374,5 +377,182 @@ describe('abcToPico8 — slice 2', () => {
       ),
     ).toBe(true);
     expect(result.p8).toBe('');
+  });
+});
+
+describe('abcToPico8 — slice 3', () => {
+  it('emits one SFX per voice and stacks them into a single music pattern', () => {
+    // Two 8-quarter-note voices in unison-canon. Each voice fits in one SFX
+    // block; the music pattern places voice 1 on channel 0, voice 2 on
+    // channel 1, channels 2 and 3 silent.
+    const result = abcToPico8(fixture('two-voice-canon.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(2);
+    expect(music).toHaveLength(1);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+
+    // Voice 1: C4..C5 → hex 18, 1a, 1c, 1d, 1f, 21, 23, 24.
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((i) => slot(sfx[0]!, i))).toEqual([
+      '18050', '1a050', '1c050', '1d050', '1f050', '21050', '23050', '24050',
+    ]);
+    // Voice 2: E4..E5 → hex 1c, 1d, 1f, 21, 23, 24, 26, 28.
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((i) => slot(sfx[1]!, i))).toEqual([
+      '1c050', '1d050', '1f050', '21050', '23050', '24050', '26050', '28050',
+    ]);
+
+    // Stop flag set; channels [sfx0, sfx1, silent ch2 (0x42), silent ch3 (0x43)].
+    expect(music[0]).toBe('04 00014243');
+  });
+
+  it('maps three voices to channels 0–2 and leaves channel 3 silent', () => {
+    const result = abcToPico8(fixture('three-voice-chord.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(3);
+    expect(music).toHaveLength(1);
+
+    expect(music[0]).toBe('04 00010243');
+  });
+
+  it('pads shorter voices with rests so all voices share block boundaries', () => {
+    // V1 has 8 quarter slots; V2 has 4. After padding, V2's last 4 slots are
+    // silent. Both voices still produce one SFX block of 8 slots.
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nCDEF GABc|\nV:2\nC2 G2|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(2);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+
+    // V2: C×2 then G×2, then 4 padding rests.
+    expect([0, 1, 2, 3].map((i) => slot(sfx[1]!, i))).toEqual([
+      '18050', '18050', '1f050', '1f050',
+    ]);
+    expect([4, 5, 6, 7].map((i) => slot(sfx[1]!, i))).toEqual([
+      '00000', '00000', '00000', '00000',
+    ]);
+    // Both voices have a single 8-slot SFX → loop_start=08 truncates the tail.
+    expect(sfx[0]!.slice(0, 8)).toBe('013c0800');
+    expect(sfx[1]!.slice(0, 8)).toBe('013c0800');
+  });
+
+  it('rejects more than four voices', () => {
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\nC|\nV:2\nC|\nV:3\nC|\nV:4\nC|\nV:5\nC|\n';
+    const result = abcToPico8(abc);
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'TOO_MANY_VOICES',
+      ),
+    ).toBe(true);
+  });
+
+  it('aligns shared loop boundaries across voices', () => {
+    // |:CDEF GABc:| in V1, |:cBAG FEDC:| in V2. Both repeat the whole tune.
+    // Single SFX block per voice; expand-self-loop emits 2 patterns referencing
+    // the same SFX pair on both channels.
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\n|:CDEF GABc:|\n' +
+      'V:2\n|:cBAG FEDC:|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(2);
+    // Single-block self-loop on both voices: one pattern with begin|end flags.
+    expect(music).toHaveLength(1);
+    expect(music[0]).toBe('03 00014243');
+  });
+
+  it('counts SFX budget across voices', () => {
+    // 4 voices × 17 blocks = 68 > 64-slot budget. Each voice has 17 blocks of
+    // 32 quarter notes. C544 = 544 quarter slots = 17 blocks of 32.
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\nC544|\nV:2\nE544|\nV:3\nG544|\nV:4\nc544|\n';
+    const result = abcToPico8(abc);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'SFX_BUDGET_EXCEEDED',
+      ),
+    ).toBe(true);
+    expect(result.p8).toBe('');
+  });
+
+  it('forces a fade-in retrigger when consecutive notes share a pitch', () => {
+    // Three half-note Cs in a row. Without a retrigger marker pico-8 would
+    // sustain them as one tone; the converter must mark the 2nd and 3rd
+    // onsets with effect=4 (fade-in).
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nC2 C2 C2|';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    // Slot 0 = first onset (no prior); slot 2 = 2nd onset (same pitch → e=4);
+    // slot 4 = 3rd onset (same pitch → e=4). Continuation slots stay e=0.
+    expect([0, 1, 2, 3, 4, 5].map(slot)).toEqual([
+      '18050', '18050', '18054', '18050', '18054', '18050',
+    ]);
+  });
+
+  it('uses fade-out for staccato repeated notes', () => {
+    // Same shape, but staccato decoration on each note → e=5 (fade-out).
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n.C2 .C2 .C2|';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    // The staccato decoration must not trigger DECORATION_DROPPED — we
+    // consume it now.
+    expect(
+      result.diagnostics.some((d) => d.code === 'DECORATION_DROPPED'),
+    ).toBe(false);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    expect([0, 1, 2, 3, 4, 5].map(slot)).toEqual([
+      '18050', '18050', '18055', '18050', '18055', '18050',
+    ]);
+  });
+
+  it('does not retrigger when adjacent same-pitch slots belong to one note', () => {
+    // A single dotted-quarter C is one IR onset spanning 3 eighth-slots — no
+    // retrigger between continuations. (Regression test for the slice-1
+    // dotted-rhythm fixture, which was correct before the fix and should
+    // stay correct.)
+    const result = abcToPico8(fixture('dotted-rhythm.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    expect([0, 1, 2].map(slot)).toEqual(['18050', '18050', '18050']);
+  });
+
+  it('warns when voice repeat regions disagree', () => {
+    // V1 loops the first half; V2 loops the whole bar. We keep V1's bounds.
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\n|:CDEF:|GABc|\n' +
+      'V:2\n|:cBAG FEDC:|\n';
+    const result = abcToPico8(abc);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'warn' && d.code === 'VOICE_REPEAT_MISMATCH',
+      ),
+    ).toBe(true);
   });
 });

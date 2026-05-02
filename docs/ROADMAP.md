@@ -27,23 +27,27 @@ the acceptance fixture of the next.
 - Slot budget is enforced: a tune needing more than 64 SFX slots errors with
   `SFX_BUDGET_EXCEEDED`.
 
-## Slice 3 — Multi-voice polyphony
+## Slice 3 — Multi-voice polyphony (shipped)
 
-**Goal:** ABC `V:` voices → distinct Pico-8 channels.
+- ABC `V:` voices → distinct Pico-8 channels (deterministic by voice order).
+- Up to 4 voices accepted; >4 errors with `TOO_MANY_VOICES`.
+- Quantizer picks one slot grid via GCD across all voices; voices share block
+  boundaries (forced cuts at loop start/end). Shorter voices are padded with
+  rests so all voices end on the same boundary.
+- Each voice's blocks emit one SFX each, numbered sequentially
+  (voice 0 first, then voice 1, …). Music pattern row N stacks
+  `[v0.block[N], v1.block[N], …]` onto channels 0..N; unused channels are
+  marked silent (`0x40 | channel`).
+- SFX budget is per total: `voices × blocksPerVoice ≤ 64`.
+- Voice 0's `|: ... :|` is authoritative; mismatched repeats in other voices
+  emit `VOICE_REPEAT_MISMATCH`.
 
-- Score IR already models voices; wire toIR to accept ≥2 and ≤4.
-- Per-voice quantize + slot allocation; each music pattern row picks one SFX
-  per channel.
-- Voice-to-channel mapping (deterministic by ABC voice order; CLI flag to
-  override).
-- Removes the multi-voice guard in `src/abc/toIR.ts` and the single-channel
-  guard in `src/pico8/emit.ts`.
-
-**Open questions**
-- Different voices may want different note-length grids. Pick the LCM, or
-  reject mismatches?
-- Per-voice instrument assignment — ABC `%%MIDI program` hint, or just a CLI
-  default per voice?
+**Resolved decisions**
+- Slot-grid picks the GCD across all voices (existing slice-2 behavior; no
+  per-voice grid).
+- Per-voice instrument assignment is deferred — all voices share the
+  `defaultInstrument` option (waveform 0 / sine). ABC `%%MIDI program` hints
+  are still ignored.
 
 ## Slice 4 — Chord support
 

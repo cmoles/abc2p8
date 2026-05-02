@@ -24,5 +24,10 @@ export const WAVEFORM_MAX = 0xf;
 export const EFFECT_MIN = 0;
 export const EFFECT_MAX = 7;
 
+// Effect codes — see docs/pico8-format.md "Effect values".
+export const EFFECT_NONE = 0;
+export const EFFECT_FADE_IN = 4;
+export const EFFECT_FADE_OUT = 5;
+
 // Pico-8 plays one SFX tick every ~1/120 second (183 samples / 22050 Hz).
 export const PICO8_TICKS_PER_SECOND = 120;

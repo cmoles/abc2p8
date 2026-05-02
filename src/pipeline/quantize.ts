@@ -1,5 +1,5 @@
 import type { Diagnostics } from '../ir/diagnostics.js';
-import type { Note, Score, Voice } from '../ir/types.js';
+import type { Note, RepeatRegion, Score, Voice } from '../ir/types.js';
 import {
   PICO8_TICKS_PER_SECOND,
   SFX_NOTES_PER_SLOT,
@@ -11,16 +11,21 @@ import {
 export interface QuantizedScore {
   speed: number;
   voices: QuantizedVoice[];
+  loop?: { beginBlock: number; endBlock: number };
 }
 
 export interface QuantizedVoice {
   id: string;
   blocks: QuantizedSlot[][];
-  loop?: { beginBlock: number; endBlock: number };
 }
 
 export interface QuantizedSlot {
   pitch: number | null;
+  // True on the slot where a source IR Note begins. Used downstream to detect
+  // same-pitch repeats and force a retrigger; a sequence of same-pitch slots
+  // with no isOnset boundary plays as one sustained tone in pico-8.
+  isOnset?: boolean;
+  onsetStaccato?: boolean;
 }
 
 const MIN_SLOT_TICKS_FALLBACK = 12; // 16th note at TICKS_PER_QUARTER=48
@@ -97,72 +102,80 @@ export function quantize(score: Score, diagnostics: Diagnostics): QuantizedScore
     );
   }
 
-  const voices: QuantizedVoice[] = [];
-  let totalBlocks = 0;
+  const voiceSlots: { id: string; slots: QuantizedSlot[] }[] = [];
   for (const voice of score.voices) {
     const flat = quantizeVoice(voice, slotTicks, diagnostics);
     if (flat === null) return null;
-
-    const loopSlots = score.repeat
-      ? resolveLoopSlots(score.repeat, slotTicks, flat.length, diagnostics)
-      : null;
-
-    const slotsToBlock =
-      loopSlots && flat.length > loopSlots.endSlot
-        ? (() => {
-            diagnostics.warn(
-              'quantize',
-              'CONTENT_AFTER_REPEAT',
-              `${flat.length - loopSlots.endSlot} slot(s) after :| dropped; pico-8 loops indefinitely.`,
-              { voice: voice.id },
-            );
-            return flat.slice(0, loopSlots.endSlot);
-          })()
-        : flat;
-
-    const forced = loopSlots
-      ? [loopSlots.startSlot, loopSlots.endSlot].filter(
-          (n) => n > 0 && n < slotsToBlock.length,
-        )
-      : [];
-
-    const blocks = chunkSlots(slotsToBlock, forced);
-
-    let loop: QuantizedVoice['loop'];
-    if (loopSlots) {
-      const beginBlock = findBlockStartingAt(blocks, loopSlots.startSlot);
-      const endBlock = findBlockEndingAt(blocks, loopSlots.endSlot);
-      if (beginBlock < 0 || endBlock < 0 || beginBlock > endBlock) {
-        diagnostics.warn(
-          'quantize',
-          'LOOP_ALIGNMENT',
-          'Could not align repeat region to SFX block boundaries; loop dropped.',
-          { voice: voice.id },
-        );
-      } else {
-        loop = { beginBlock, endBlock };
-      }
-    }
-
-    voices.push(loop ? { id: voice.id, blocks, loop } : { id: voice.id, blocks });
-    totalBlocks += blocks.length;
+    voiceSlots.push({ id: voice.id, slots: flat });
   }
 
-  if (voices.every((v) => v.blocks.length === 0)) {
+  const maxSlots = voiceSlots.reduce((m, v) => Math.max(m, v.slots.length), 0);
+
+  let loopSlots = score.repeat
+    ? resolveLoopSlots(score.repeat, slotTicks, maxSlots, diagnostics)
+    : null;
+
+  let totalSlots = maxSlots;
+  if (loopSlots && totalSlots > loopSlots.endSlot) {
+    diagnostics.warn(
+      'quantize',
+      'CONTENT_AFTER_REPEAT',
+      `${totalSlots - loopSlots.endSlot} slot(s) after :| dropped; pico-8 loops indefinitely.`,
+    );
+    totalSlots = loopSlots.endSlot;
+  }
+
+  // Pad shorter voices with rests so all voices share the same slot length.
+  // Truncate any voice that ran past `totalSlots` (only possible when content
+  // after the loop end was dropped above).
+  for (const v of voiceSlots) {
+    if (v.slots.length > totalSlots) v.slots.length = totalSlots;
+    while (v.slots.length < totalSlots) v.slots.push({ pitch: null });
+  }
+
+  if (totalSlots === 0) {
     diagnostics.error('quantize', 'EMPTY_SCORE', 'Score has no notes to convert.');
     return null;
   }
 
+  const forced = loopSlots
+    ? [loopSlots.startSlot, loopSlots.endSlot].filter((n) => n > 0 && n < totalSlots)
+    : [];
+
+  const blockBoundaries = computeBlockBoundaries(totalSlots, forced);
+  const blocksPerVoice = blockBoundaries.length;
+
+  const voices: QuantizedVoice[] = voiceSlots.map((v) => ({
+    id: v.id,
+    blocks: blockBoundaries.map(([s, e]) => v.slots.slice(s, e)),
+  }));
+
+  const totalBlocks = voices.length * blocksPerVoice;
   if (totalBlocks > SFX_SLOTS) {
     diagnostics.error(
       'quantize',
       'SFX_BUDGET_EXCEEDED',
-      `Tune needs ${totalBlocks} SFX slot(s); pico-8 supports ${SFX_SLOTS}.`,
+      `Tune needs ${totalBlocks} SFX slot(s) (${voices.length} voice(s) × ${blocksPerVoice} block(s)); pico-8 supports ${SFX_SLOTS}.`,
     );
     return null;
   }
 
-  return { speed, voices };
+  let loop: QuantizedScore['loop'];
+  if (loopSlots) {
+    const beginBlock = findBlockStartingAt(blockBoundaries, loopSlots.startSlot);
+    const endBlock = findBlockEndingAt(blockBoundaries, loopSlots.endSlot);
+    if (beginBlock < 0 || endBlock < 0 || beginBlock > endBlock) {
+      diagnostics.warn(
+        'quantize',
+        'LOOP_ALIGNMENT',
+        'Could not align repeat region to SFX block boundaries; loop dropped.',
+      );
+    } else {
+      loop = { beginBlock, endBlock };
+    }
+  }
+
+  return loop ? { speed, voices, loop } : { speed, voices };
 }
 
 function quantizeVoice(
@@ -198,14 +211,19 @@ function quantizeVoice(
       slots.push({ pitch: null });
     }
     for (let i = 0; i < span; i += 1) {
-      slots.push({ pitch: note.pitch });
+      const slot: QuantizedSlot = { pitch: note.pitch };
+      if (i === 0 && note.pitch !== null) {
+        slot.isOnset = true;
+        if (note.staccato) slot.onsetStaccato = true;
+      }
+      slots.push(slot);
     }
   }
   return slots;
 }
 
 function resolveLoopSlots(
-  repeat: { startTick: number; endTick: number },
+  repeat: RepeatRegion,
   slotTicks: number,
   totalSlots: number,
   diagnostics: Diagnostics,
@@ -223,39 +241,35 @@ function resolveLoopSlots(
   return { startSlot, endSlot };
 }
 
-function chunkSlots(slots: QuantizedSlot[], forced: number[]): QuantizedSlot[][] {
-  if (slots.length === 0) return [];
-  const boundaries = Array.from(new Set(forced.filter((n) => n > 0 && n < slots.length))).sort(
+function computeBlockBoundaries(totalSlots: number, forced: number[]): [number, number][] {
+  if (totalSlots === 0) return [];
+  const cuts = Array.from(new Set(forced.filter((n) => n > 0 && n < totalSlots))).sort(
     (a, b) => a - b,
   );
-  boundaries.push(slots.length);
+  cuts.push(totalSlots);
 
-  const blocks: QuantizedSlot[][] = [];
+  const ranges: [number, number][] = [];
   let cursor = 0;
-  for (const boundary of boundaries) {
-    while (cursor < boundary) {
-      const end = Math.min(cursor + SFX_NOTES_PER_SLOT, boundary);
-      blocks.push(slots.slice(cursor, end));
+  for (const cut of cuts) {
+    while (cursor < cut) {
+      const end = Math.min(cursor + SFX_NOTES_PER_SLOT, cut);
+      ranges.push([cursor, end]);
       cursor = end;
     }
   }
-  return blocks;
+  return ranges;
 }
 
-function findBlockStartingAt(blocks: QuantizedSlot[][], slotIndex: number): number {
-  let acc = 0;
-  for (let i = 0; i < blocks.length; i += 1) {
-    if (acc === slotIndex) return i;
-    acc += blocks[i]!.length;
+function findBlockStartingAt(boundaries: [number, number][], slotIndex: number): number {
+  for (let i = 0; i < boundaries.length; i += 1) {
+    if (boundaries[i]![0] === slotIndex) return i;
   }
-  return acc === slotIndex ? blocks.length : -1;
+  return -1;
 }
 
-function findBlockEndingAt(blocks: QuantizedSlot[][], slotIndex: number): number {
-  let acc = 0;
-  for (let i = 0; i < blocks.length; i += 1) {
-    acc += blocks[i]!.length;
-    if (acc === slotIndex) return i;
+function findBlockEndingAt(boundaries: [number, number][], slotIndex: number): number {
+  for (let i = 0; i < boundaries.length; i += 1) {
+    if (boundaries[i]![1] === slotIndex) return i;
   }
   return -1;
 }

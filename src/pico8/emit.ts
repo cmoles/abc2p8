@@ -1,7 +1,10 @@
 import type { Diagnostics } from '../ir/diagnostics.js';
 import type { QuantizedScore, QuantizedSlot, QuantizedVoice } from '../pipeline/quantize.js';
 import {
+  CHANNEL_COUNT,
   DEFAULT_EFFECT,
+  EFFECT_FADE_IN,
+  EFFECT_FADE_OUT,
   PICO8_MIDI_OFFSET,
   PICO8_PITCH_MAX,
   PICO8_PITCH_MIN,
@@ -26,24 +29,43 @@ export function emit(
   diagnostics: Diagnostics,
   opts: EmitOptions,
 ): string | null {
-  if (q.voices.length !== 1) {
+  if (q.voices.length === 0) {
+    diagnostics.error('emit', 'NO_VOICES', 'Quantized score has no voices.');
+    return null;
+  }
+  if (q.voices.length > CHANNEL_COUNT) {
     diagnostics.error(
       'emit',
-      'CHANNEL_ALLOCATION_UNSUPPORTED',
-      `Slice 2 emits a single channel; got ${q.voices.length} voices.`,
+      'CHANNEL_OVERFLOW',
+      `${q.voices.length} voices exceeds pico-8's ${CHANNEL_COUNT} channels.`,
     );
     return null;
   }
-  const voice = q.voices[0]!;
 
-  const sfxLines: string[] = [];
-  for (let i = 0; i < voice.blocks.length; i += 1) {
-    const line = emitSfxLine(voice.blocks[i]!, voice.id, q.speed, diagnostics, opts);
-    if (line === null) return null;
-    sfxLines.push(line);
+  const blocksPerVoice = q.voices[0]!.blocks.length;
+  for (const v of q.voices) {
+    if (v.blocks.length !== blocksPerVoice) {
+      diagnostics.error(
+        'emit',
+        'VOICE_BLOCK_MISMATCH',
+        `Voice ${v.id} has ${v.blocks.length} block(s); expected ${blocksPerVoice}.`,
+        { voice: v.id },
+      );
+      return null;
+    }
   }
 
-  const musicLines = emitMusicLines(voice);
+  const sfxLines: string[] = [];
+  for (let v = 0; v < q.voices.length; v += 1) {
+    const voice = q.voices[v]!;
+    for (let b = 0; b < voice.blocks.length; b += 1) {
+      const line = emitSfxLine(voice.blocks[b]!, voice.id, q.speed, diagnostics, opts);
+      if (line === null) return null;
+      sfxLines.push(line);
+    }
+  }
+
+  const musicLines = emitMusicLines(q.voices, blocksPerVoice, q.loop);
   return emptyCart(sfxLines, musicLines);
 }
 
@@ -55,17 +77,31 @@ function emitSfxLine(
   opts: EmitOptions,
 ): string | null {
   const notes: Pico8Note[] = [];
-  for (const slot of slots) {
+  for (let i = 0; i < slots.length; i += 1) {
+    const slot = slots[i]!;
     const pitch = pitchForSlot(slot, diagnostics, voiceId);
     if (pitch === null && slot.pitch !== null) return null;
     if (pitch === null) {
       notes.push({ pitch: 0, waveform: 0, volume: 0, effect: 0 });
     } else {
+      // Pico-8 sustains across same-pitch slots — going from C3 vol=5 to C3
+      // vol=5 with no effect plays as one merged tone, losing the second
+      // onset. To preserve the source's note boundaries, force a retrigger
+      // on onset slots whose previous slot in the same SFX has the same
+      // pitch. Default to fade-in; staccato sources prefer fade-out.
+      const prev = i > 0 ? slots[i - 1]! : null;
+      const samePrev = prev !== null && prev.pitch === slot.pitch;
+      const needsRetrigger = !!slot.isOnset && samePrev;
+      const effect = needsRetrigger
+        ? slot.onsetStaccato
+          ? EFFECT_FADE_OUT
+          : EFFECT_FADE_IN
+        : DEFAULT_EFFECT;
       notes.push({
         pitch,
         waveform: opts.defaultInstrument,
         volume: opts.defaultVolume,
-        effect: DEFAULT_EFFECT,
+        effect,
       });
     }
   }
@@ -83,39 +119,36 @@ function emitSfxLine(
   return encodeSfxLine(sfx);
 }
 
-function emitMusicLines(voice: QuantizedVoice): string[] {
+function emitMusicLines(
+  voices: QuantizedVoice[],
+  blocksPerVoice: number,
+  loop: QuantizedScore['loop'],
+): string[] {
   const lines: string[] = [];
-  const lastIndex = voice.blocks.length - 1;
-  const loop = voice.loop;
-  // Pico-8's loop_end search excludes the current pattern, so begin+end on the
-  // same pattern doesn't self-loop. When the loop region collapses to one
-  // block, emit a duplicate music pattern referencing the same SFX so begin
-  // and end land on different patterns.
-  const expandSelfLoop = !!loop && loop.beginBlock === loop.endBlock;
-  for (let i = 0; i < voice.blocks.length; i += 1) {
+  const lastIndex = blocksPerVoice - 1;
+
+  const channelsForBlock = (blockIdx: number): (number | 'silent')[] => {
+    const channels: (number | 'silent')[] = [];
+    for (let c = 0; c < CHANNEL_COUNT; c += 1) {
+      if (c < voices.length) channels.push(sfxIdFor(c, blockIdx, blocksPerVoice));
+      else channels.push('silent');
+    }
+    return channels;
+  };
+
+  for (let i = 0; i < blocksPerVoice; i += 1) {
     const beginLoop = !!loop && i === loop.beginBlock;
-    const endLoop = !!loop && i === loop.endBlock && !expandSelfLoop;
+    const endLoop = !!loop && i === loop.endBlock;
     const stop = !loop && i === lastIndex;
     lines.push(
-      encodeMusicLine({
-        beginLoop,
-        endLoop,
-        stop,
-        channels: [i, 'silent', 'silent', 'silent'],
-      }),
-    );
-  }
-  if (expandSelfLoop && loop) {
-    lines.push(
-      encodeMusicLine({
-        beginLoop: false,
-        endLoop: true,
-        stop: false,
-        channels: [loop.beginBlock, 'silent', 'silent', 'silent'],
-      }),
+      encodeMusicLine({ beginLoop, endLoop, stop, channels: channelsForBlock(i) }),
     );
   }
   return lines;
+}
+
+function sfxIdFor(voiceIdx: number, blockIdx: number, blocksPerVoice: number): number {
+  return voiceIdx * blocksPerVoice + blockIdx;
 }
 
 function pitchForSlot(

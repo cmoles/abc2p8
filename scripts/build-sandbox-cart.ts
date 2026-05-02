@@ -17,11 +17,24 @@ interface ManifestEntry {
   sfxCount: number;
 }
 
-const FIXTURES: Fixture[] = [
+const SLICE2_FIXTURES: Fixture[] = [
   { name: 'long-monophonic', file: 'tests/fixtures/abc/long-monophonic.abc' },
   { name: 'repeat-section', file: 'tests/fixtures/abc/repeat-section.abc' },
   { name: 'whole-tune-repeat', file: 'tests/fixtures/abc/whole-tune-repeat.abc' },
 ];
+
+// Slice 3 introduces multi-voice polyphony. The slice2 worktree already
+// audits the monophonic fixtures, so this set is just the new multi-voice
+// ones.
+const SLICE3_FIXTURES: Fixture[] = [
+  { name: 'two-voice-canon', file: 'tests/fixtures/abc/two-voice-canon.abc' },
+  { name: 'three-voice-chord', file: 'tests/fixtures/abc/three-voice-chord.abc' },
+];
+
+const SLICES: Record<string, Fixture[]> = {
+  slice2: SLICE2_FIXTURES,
+  slice3: SLICE3_FIXTURES,
+};
 
 const TOTAL_SLOTS = 64;
 const EMPTY_SFX_LINE = '0'.repeat(168);
@@ -48,20 +61,25 @@ function rebaseMusicLine(line: string, offset: number): string {
   if (space < 0) throw new Error(`malformed music line: ${line}`);
   const flag = line.slice(0, space);
   const channels = line.slice(space + 1);
-  const ch0 = parseInt(channels.slice(0, 2), 16);
-  const rest = channels.slice(2);
-  const newCh0 = (ch0 + offset).toString(16).padStart(2, '0');
-  return `${flag} ${newCh0}${rest}`;
+  if (channels.length !== 8) throw new Error(`malformed music line: ${line}`);
+  let rebased = '';
+  for (let c = 0; c < 4; c += 1) {
+    const byte = parseInt(channels.slice(c * 2, c * 2 + 2), 16);
+    // Bit 6 set = silent channel marker (0x40 | channelIndex); leave it alone.
+    const next = (byte & 0x40) ? byte : byte + offset;
+    rebased += next.toString(16).padStart(2, '0');
+  }
+  return `${flag} ${rebased}`;
 }
 
-function buildCart(): { manifest: ManifestEntry[]; sfx: string; music: string } {
+function buildCart(fixtures: Fixture[]): { manifest: ManifestEntry[]; sfx: string; music: string } {
   const sfxLines: string[] = Array(TOTAL_SLOTS).fill(EMPTY_SFX_LINE);
   const musicLines: string[] = Array(TOTAL_SLOTS).fill(EMPTY_MUSIC_LINE);
   const manifest: ManifestEntry[] = [];
 
   let sfxCursor = 0;
   let musicCursor = 0;
-  for (const fx of FIXTURES) {
+  for (const fx of fixtures) {
     const abc = readFileSync(resolve(repoRoot, fx.file), 'utf8');
     const result = abcToPico8(abc);
     const errors = result.diagnostics.filter((d) => d.severity === 'error');
@@ -104,5 +122,11 @@ function buildCart(): { manifest: ManifestEntry[]; sfx: string; music: string } 
   };
 }
 
-const cart = buildCart();
+const sliceArg = process.argv[2] ?? 'slice3';
+const fixtures = SLICES[sliceArg];
+if (!fixtures) {
+  process.stderr.write(`Unknown slice "${sliceArg}". Available: ${Object.keys(SLICES).join(', ')}\n`);
+  process.exit(2);
+}
+const cart = buildCart(fixtures);
 process.stdout.write(`${JSON.stringify(cart, null, 2)}\n`);
