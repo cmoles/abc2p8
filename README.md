@@ -24,10 +24,13 @@ const { p8, diagnostics } = abcToPico8(abcSource);
 ## Limitations
 
 abc2p8 is built in vertical slices; each slice lifts a class of restrictions.
-The current shipped slice (slice 2) supports:
+Slices 1–4 are shipped:
 
-- **One voice per tune.** `V:1` `V:2` …  errors with `MULTI_VOICE_UNSUPPORTED`. Slice 3 will lift this.
-- **No chords within a voice.** `[CEG]` errors with `CHORD_UNSUPPORTED`. Slice 4 will lift this.
+- **Up to 4 voices** (one per Pico-8 channel). `V:1`…`V:4` map to channels in
+  declaration order; more than 4 errors with `TOO_MANY_VOICES`.
+- **Chords are split onto sibling channels.** `[CEG]` borrows from the unused
+  channel pool; the lowest pitch lands on the lowest channel. Chord arity plus
+  voice count must total ≤ 4 channels — otherwise `CHORD_OVERFLOW` errors.
 - **Up to 64 SFX slots** (Pico-8 cart limit). Long tunes are chunked across slots; tunes that exceed the budget error with `SFX_BUDGET_EXCEEDED`.
 - **Pitch range C2–D#7.** Notes outside the range are shifted by whole octaves where possible; otherwise `OUT_OF_RANGE` errors.
 - **One repeat region per tune.** `|: … :|` becomes a Pico-8 begin/end-loop. Multiple regions warn and keep the first; content after `:|` is dropped.

@@ -19,7 +19,7 @@ Severity levels:
 | Capability | Limit |
 |---|---|
 | Voices | up to 4 (one per pico-8 channel) |
-| Chords | not supported within a voice (slice 4) |
+| Chords | supported; chord arity + voice count ≤ 4 channels total |
 | SFX slots | 64 total, 32 notes per slot |
 | Pitch range | C2–D#7 in Pico-8 editor notation (MIDI 36–87) |
 | Quantize grid | finest 32nd note, coarsest quarter note |
@@ -45,7 +45,7 @@ Anything beyond these surfaces as one of the codes below.
 | `NO_VOICES` | error | Staff has no voice content. |
 | `TOO_MANY_VOICES` | error | Tune declares more than 4 `V:` voices; pico-8 has only 4 channels. |
 | `VOICE_REPEAT_MISMATCH` | warn | A non-V1 voice has different `\|: … :\|` bounds than V1; V1's bounds are used. |
-| `CHORD_UNSUPPORTED` | error | A chord (`[CEG]`) was found in monophonic mode. Lifts in slice 4. |
+| `CHORD_OVERFLOW` | error | Chord arity plus voice count exceeds 4 channels. Reduce chord size or drop a voice. |
 | `OVERLAY_IGNORED` | warn | Voice overlay (`&` syntax) dropped — overlaid notes will not be heard. |
 | `TRANSPOSE_IGNORED` | warn | `%%transpose` directive ignored; pitches not shifted. |
 | `DECORATION_DROPPED` | warn | A note carried decorations (trill, fermata, accent, etc.); the note plays without them. |

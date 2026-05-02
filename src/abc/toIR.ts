@@ -119,9 +119,20 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
   const converted: VoiceConvertResult[] = [];
   for (let i = 0; i < allVoices.length; i += 1) {
     const id = `V${i + 1}`;
-    const result = convertVoiceItems(allVoices[i]!, firstStaff.key, id, diagnostics);
-    if (!result) return null;
-    converted.push(result);
+    converted.push(convertVoiceItems(allVoices[i]!, firstStaff.key, id, diagnostics));
+  }
+
+  const totalChannels = converted.reduce((sum, c) => sum + c.siblings.length, 0);
+  if (totalChannels > MAX_VOICES) {
+    const breakdown = converted
+      .map((c, i) => `V${i + 1}=${c.siblings.length}`)
+      .join(', ');
+    diagnostics.error(
+      'toIR',
+      'CHORD_OVERFLOW',
+      `Chords need ${totalChannels} channels (${breakdown}); pico-8 has only ${MAX_VOICES}.`,
+    );
+    return null;
   }
 
   const scoreRepeat = converted[0]!.repeat;
@@ -143,10 +154,19 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
     }
   }
 
-  const voices: Voice[] = converted.map((c, i) => ({
-    id: `V${i + 1}`,
-    notes: c.notes,
-  }));
+  const voices: Voice[] = [];
+  for (let i = 0; i < converted.length; i += 1) {
+    const c = converted[i]!;
+    const sourceId = `V${i + 1}`;
+    if (c.siblings.length === 1) {
+      voices.push({ id: sourceId, notes: c.siblings[0]! });
+    } else {
+      for (let s = 0; s < c.siblings.length; s += 1) {
+        const suffix = String.fromCharCode(0x41 + s);
+        voices.push({ id: `${sourceId}.${suffix}`, notes: c.siblings[s]! });
+      }
+    }
+  }
 
   const meter = firstStaff.meter;
   const timeSignature = meter?.value?.[0]
@@ -168,7 +188,11 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
 }
 
 interface VoiceConvertResult {
-  notes: Note[];
+  // One sibling per slot in the source voice's max chord arity. A voice with no
+  // chords always has exactly one sibling. Sibling 0 carries the lowest pitch
+  // at each chord position; higher siblings carry higher pitches, with rests
+  // padding positions where the chord has fewer notes than the max arity.
+  siblings: Note[][];
   repeat: RepeatRegion | null;
 }
 
@@ -177,19 +201,61 @@ function convertVoiceItems(
   key: KeySignature | undefined,
   voiceId: string,
   diagnostics: Diagnostics,
-): VoiceConvertResult | null {
+): VoiceConvertResult {
   const ctx: ConvertContext = {
     diagnostics,
     keyMap: keySignatureMap(key),
     measureAccidentals: new Map(),
   };
 
-  const notes: Note[] = [];
+  const siblings: Note[][] = [[]];
+  const pendingTies: (Note | null)[] = [null];
   let cursor = 0;
-  let pendingTie: Note | null = null;
   let repeatStart: number | null = null;
   let repeatEnd: number | null = null;
   let extraRepeatWarned = false;
+
+  const ensureSiblingCount = (n: number): void => {
+    while (siblings.length < n) {
+      siblings.push([]);
+      pendingTies.push(null);
+    }
+  };
+
+  const pushRest = (siblingIdx: number, durationTicks: number): void => {
+    siblings[siblingIdx]!.push({ startTick: cursor, durationTick: durationTicks, pitch: null });
+    pendingTies[siblingIdx] = null;
+  };
+
+  const pushPitch = (
+    siblingIdx: number,
+    midi: number,
+    durationTicks: number,
+    staccato: boolean,
+    startsTie: boolean,
+  ): void => {
+    const note: Note = { startTick: cursor, durationTick: durationTicks, pitch: midi };
+    if (staccato) note.staccato = true;
+
+    const pendingTie = pendingTies[siblingIdx];
+    let target: Note;
+    if (pendingTie && pendingTie.pitch === midi) {
+      pendingTie.durationTick += durationTicks;
+      if (staccato) pendingTie.staccato = true;
+      target = pendingTie;
+    } else {
+      siblings[siblingIdx]!.push(note);
+      target = note;
+    }
+
+    if (startsTie) {
+      target.tiedToNext = true;
+      pendingTies[siblingIdx] = target;
+    } else {
+      if (pendingTie) pendingTie.tiedToNext = false;
+      pendingTies[siblingIdx] = null;
+    }
+  };
 
   for (const item of items) {
     if (item.el_type === 'bar') {
@@ -251,53 +317,40 @@ function convertVoiceItems(
     diagnoseNoteOrnaments(item, voiceId, diagnostics);
 
     if (item.rest) {
-      pendingTie = null;
-      notes.push({ startTick: cursor, durationTick: durationTicks, pitch: null });
+      for (let i = 0; i < siblings.length; i += 1) pushRest(i, durationTicks);
       cursor += durationTicks;
       continue;
     }
 
-    const pitches = (item.pitches ?? []) as PitchObj[];
-    if (pitches.length === 0) {
+    const rawPitches = (item.pitches ?? []) as Array<PitchObj & { startTie?: unknown }>;
+    if (rawPitches.length === 0) {
       diagnostics.info('toIR', 'EMPTY_NOTE', 'Note item has no pitches; skipped.', {
         voice: voiceId,
       });
       continue;
     }
-    if (pitches.length > 1) {
-      diagnostics.error(
-        'toIR',
-        'CHORD_UNSUPPORTED',
-        `Chord with ${pitches.length} notes; slice 3 supports monophonic voices only.`,
-        { voice: voiceId },
-      );
-      return null;
-    }
 
-    const midi = pitchToMidi(pitches[0]!, ctx);
-    const note: Note = { startTick: cursor, durationTick: durationTicks, pitch: midi };
-    if (hasStaccato(item)) note.staccato = true;
+    const indexed = rawPitches.map((p) => ({ p, midi: pitchToMidi(p, ctx) }));
+    indexed.sort((a, b) => a.midi - b.midi);
+    ensureSiblingCount(indexed.length);
 
-    if (pendingTie && pendingTie.pitch === midi) {
-      pendingTie.durationTick += durationTicks;
-      if (note.staccato) pendingTie.staccato = true;
-    } else {
-      notes.push(note);
+    const itemTie = noteItemHasTie(item);
+    const staccato = hasStaccato(item);
+
+    for (let i = 0; i < siblings.length; i += 1) {
+      if (i < indexed.length) {
+        const entry = indexed[i]!;
+        const startsTie = itemTie || !!entry.p.startTie;
+        pushPitch(i, entry.midi, durationTicks, staccato, startsTie);
+      } else {
+        pushRest(i, durationTicks);
+      }
     }
     cursor += durationTicks;
-
-    const startsTie = noteHasTie(item);
-    if (startsTie) {
-      pendingTie = pendingTie && pendingTie.pitch === midi ? pendingTie : note;
-      pendingTie.tiedToNext = true;
-    } else {
-      if (pendingTie) pendingTie.tiedToNext = false;
-      pendingTie = null;
-    }
   }
 
   const repeat = finalizeRepeatRegion(repeatStart, repeatEnd, cursor, voiceId, diagnostics);
-  return { notes, repeat };
+  return { siblings, repeat };
 }
 
 interface RepeatState {
@@ -546,11 +599,7 @@ function hasStaccato(item: VoiceItemNote): boolean {
   return !!ornaments.decoration?.includes('staccato');
 }
 
-function noteHasTie(item: VoiceItemNote): boolean {
-  const anyItem = item as unknown as { startTie?: unknown; pitches?: PitchObj[] };
-  if (anyItem.startTie) return true;
-  for (const p of (anyItem.pitches ?? []) as Array<PitchObj & { startTie?: unknown }>) {
-    if (p.startTie) return true;
-  }
-  return false;
+function noteItemHasTie(item: VoiceItemNote): boolean {
+  const anyItem = item as unknown as { startTie?: unknown };
+  return !!anyItem.startTie;
 }

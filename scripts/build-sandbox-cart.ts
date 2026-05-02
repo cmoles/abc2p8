@@ -31,9 +31,20 @@ const SLICE3_FIXTURES: Fixture[] = [
   { name: 'three-voice-chord', file: 'tests/fixtures/abc/three-voice-chord.abc' },
 ];
 
+// Slice 4 introduces in-voice chord support. The triad shows pure chord
+// splitting; the cadence walks chord changes across multiple positions; the
+// chord+melody fixture mixes a chord-bearing voice with a separate
+// monophonic voice (sustained chord under a moving line).
+const SLICE4_FIXTURES: Fixture[] = [
+  { name: 'chord-triad', file: 'tests/fixtures/abc/chord-triad.abc' },
+  { name: 'chord-progression', file: 'tests/fixtures/abc/chord-progression.abc' },
+  { name: 'chord-with-melody', file: 'tests/fixtures/abc/chord-with-melody.abc' },
+];
+
 const SLICES: Record<string, Fixture[]> = {
   slice2: SLICE2_FIXTURES,
   slice3: SLICE3_FIXTURES,
+  slice4: SLICE4_FIXTURES,
 };
 
 const TOTAL_SLOTS = 64;

@@ -49,20 +49,21 @@ the acceptance fixture of the next.
   `defaultInstrument` option (waveform 0 / sine). ABC `%%MIDI program` hints
   are still ignored.
 
-## Slice 4 — Chord support
+## Slice 4 — Chord support (shipped)
 
-**Goal:** chords within a voice, split across remaining channels.
-
-- toIR accepts ABC chords (`[CEG]`), expands them onto sibling channels
-  borrowed from the unused channel pool.
-- Channel-budget diagnostics: warn/error when chord arity + voice count > 4.
-- Removes the chord guard in `src/abc/toIR.ts`.
-
-**Open questions**
-- Voicing priority when over-budget — drop the lowest note? The highest?
-  Configurable?
-- Interaction with slice 3: a 2-voice tune leaves 2 channels for chords; a
-  4-voice tune leaves 0. Document this clearly.
+- ABC chords (`[CEG]`) expand into sibling voices in the IR — one sibling per
+  pitch in the largest chord that voice contains. Sibling 0 carries the lowest
+  pitch, sibling N-1 the highest.
+- At positions where the chord has fewer notes than the voice's max arity,
+  the upper siblings get rests; single notes within a chord-bearing voice land
+  on sibling 0 with the rest silent.
+- Each sibling becomes a normal `Voice` and is fed through quantize/emit
+  unchanged — the channel layout falls out of voice ordering. A 2-voice tune
+  with V1=`[CE]` and V2=`g` uses three channels (V1.A, V1.B, V2).
+- Channel budget is enforced at toIR: sum of per-voice max chord arity must be
+  ≤ 4, otherwise `CHORD_OVERFLOW` errors.
+- Voicing priority deferred — when over-budget the converter errors rather
+  than picking which notes to drop. Edit the ABC to fit.
 
 ## Slice 5 — Web playground
 

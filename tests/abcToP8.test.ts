@@ -75,15 +75,6 @@ describe('abcToPico8 — slice 1', () => {
     expect(line.slice(8, 13)).toBe('1e050');
   });
 
-  it('rejects chord input with an error diagnostic', () => {
-    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n[CEG]|';
-    const result = abcToPico8(abc);
-    expect(result.p8).toBe('');
-    expect(
-      result.diagnostics.some((d) => d.severity === 'error' && d.code === 'CHORD_UNSUPPORTED'),
-    ).toBe(true);
-  });
-
   it('octave-shifts notes that fall below Pico-8 range', () => {
     // C,, in ABC = C2 (scientific) = MIDI 36 = pico-8 pitch 0 (in range).
     // C,,, = C1 = MIDI 24 = pico-8 pitch -12 (out of range, shift up an octave).
@@ -552,6 +543,185 @@ describe('abcToPico8 — slice 3', () => {
     expect(
       result.diagnostics.some(
         (d) => d.severity === 'warn' && d.code === 'VOICE_REPEAT_MISMATCH',
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('abcToPico8 — slice 4', () => {
+  it('expands a triad onto sibling channels (lowest pitch first)', () => {
+    // [CEG] → V1.A=C(18), V1.B=E(1c), V1.C=G(1f) on channels 0/1/2.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n[CEG]|';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(3);
+    expect(music).toHaveLength(1);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    expect(slot(sfx[0]!, 0)).toBe('18050');
+    expect(slot(sfx[1]!, 0)).toBe('1c050');
+    expect(slot(sfx[2]!, 0)).toBe('1f050');
+
+    // Channels 0..2 carry the chord; channel 3 is silent.
+    expect(music[0]).toBe('04 00010243');
+  });
+
+  it('walks chord siblings in step across multiple chord positions', () => {
+    // [CEG]2 [FAc]2 — two half-note chords. Slot grid is a quarter (48 ticks),
+    // so each chord occupies two slots. Lowest pitch travels in V1.A, etc.
+    const result = abcToPico8(fixture('chord-triad.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(3);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+
+    // V1.A: C C F F
+    expect([0, 1, 2, 3].map((i) => slot(sfx[0]!, i))).toEqual([
+      '18050', '18050', '1d050', '1d050',
+    ]);
+    // V1.B: E E A A
+    expect([0, 1, 2, 3].map((i) => slot(sfx[1]!, i))).toEqual([
+      '1c050', '1c050', '21050', '21050',
+    ]);
+    // V1.C: G G c c
+    expect([0, 1, 2, 3].map((i) => slot(sfx[2]!, i))).toEqual([
+      '1f050', '1f050', '24050', '24050',
+    ]);
+  });
+
+  it('mixes a chord voice with a separate monophonic voice across the channel pool', () => {
+    // V1 has a 2-note chord [CE] sustained for 4 quarters; V2 plays GAGA.
+    // Total channels = 2 (V1) + 1 (V2) = 3. Channel 3 stays silent.
+    const result = abcToPico8(fixture('chord-with-melody.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(3);
+    expect(music).toHaveLength(1);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+
+    // V1.A: C sustained for 4 slots.
+    expect([0, 1, 2, 3].map((i) => slot(sfx[0]!, i))).toEqual([
+      '18050', '18050', '18050', '18050',
+    ]);
+    // V1.B: E sustained for 4 slots.
+    expect([0, 1, 2, 3].map((i) => slot(sfx[1]!, i))).toEqual([
+      '1c050', '1c050', '1c050', '1c050',
+    ]);
+    // V2: G A G A.
+    expect([0, 1, 2, 3].map((i) => slot(sfx[2]!, i))).toEqual([
+      '1f050', '21050', '1f050', '21050',
+    ]);
+
+    expect(music[0]).toBe('04 00010243');
+  });
+
+  it('rests the upper siblings on positions where the chord has fewer notes', () => {
+    // [CEG] D [CFA]: max arity 3, but the middle position is a single note.
+    // Sibling A carries C, D, C; siblings B and C rest at position 1.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n[CEG] D [CFA]|';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(3);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+
+    // V1.A: C, D, C
+    expect([0, 1, 2].map((i) => slot(sfx[0]!, i))).toEqual([
+      '18050', '1a050', '18050',
+    ]);
+    // V1.B: E, rest, F
+    expect([0, 1, 2].map((i) => slot(sfx[1]!, i))).toEqual([
+      '1c050', '00000', '1d050',
+    ]);
+    // V1.C: G, rest, A
+    expect([0, 1, 2].map((i) => slot(sfx[2]!, i))).toEqual([
+      '1f050', '00000', '21050',
+    ]);
+  });
+
+  it('packs two two-note chords into all four channels', () => {
+    // V1=[CE], V2=[GB]: 2 + 2 = 4 channels exactly. No silent channel.
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\n[CE]|\n' +
+      'V:2\n[GB]|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(4);
+    expect(music).toHaveLength(1);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    // V1.A=C, V1.B=E, V2.A=G, V2.B=B → 18, 1c, 1f, 23.
+    expect(slot(sfx[0]!, 0)).toBe('18050');
+    expect(slot(sfx[1]!, 0)).toBe('1c050');
+    expect(slot(sfx[2]!, 0)).toBe('1f050');
+    expect(slot(sfx[3]!, 0)).toBe('23050');
+
+    // All four channels active — none of the 0x40|c silent markers.
+    expect(music[0]).toBe('04 00010203');
+  });
+
+  it('errors when the total channel demand exceeds 4', () => {
+    // 5-note chord — sole voice but 5 > 4 channels.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n[CEGce]|';
+    const result = abcToPico8(abc);
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'CHORD_OVERFLOW',
+      ),
+    ).toBe(true);
+  });
+
+  it('chains chord changes across a cadence', () => {
+    // I IV V I in C: each chord is a 3-note triad. Sibling A walks the bass
+    // line C → F → G → C → F → G → C; each slot transition is a pitch change
+    // so no same-pitch retrigger flags are emitted.
+    const result = abcToPico8(fixture('chord-progression.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(3);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+
+    // Sibling A (bass): C C F F G G C C F F G G C C C C → 18 18 1d 1d 1f 1f 18 18 …
+    expect([0, 2, 4, 6, 8, 10, 12, 14].map((i) => slot(sfx[0]!, i))).toEqual([
+      '18050', '1d050', '1f050', '18050', '1d050', '1f050', '18050', '18050',
+    ]);
+  });
+
+  it('errors when chord arity plus voice count exceeds 4', () => {
+    // 3-note chord in V1 + monophonic V2 + monophonic V3 = 5 channels.
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\n[CEG]|\n' +
+      'V:2\nc|\n' +
+      'V:3\ne|\n';
+    const result = abcToPico8(abc);
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'CHORD_OVERFLOW',
       ),
     ).toBe(true);
   });
