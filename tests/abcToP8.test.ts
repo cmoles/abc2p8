@@ -317,6 +317,52 @@ describe('abcToPico8 — slice 2', () => {
     expect(music[0]!.startsWith('04 ')).toBe(true);
   });
 
+  it('warns when input contains more than one tune', () => {
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nCDEF|\n\n' +
+      'X:2\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nGABc|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'warn' && d.code === 'MULTIPLE_TUNES',
+      ),
+    ).toBe(true);
+  });
+
+  it('emits METER_CHANGE_IGNORED for an inline meter change', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nCDEF|[M:3/4]GAB|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'info' && d.code === 'METER_CHANGE_IGNORED',
+      ),
+    ).toBe(true);
+  });
+
+  it('warns when a note carries decorations', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n!trill!C DEF|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'warn' && d.code === 'DECORATION_DROPPED',
+      ),
+    ).toBe(true);
+  });
+
+  it('warns when a note has grace notes attached', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n{D}C DEF|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'warn' && d.code === 'GRACE_NOTES_DROPPED',
+      ),
+    ).toBe(true);
+  });
+
   it('errors when a tune needs more than 64 SFX slots', () => {
     // L:1/4 quarter slot → 32 quarter notes per SFX. 64×32=2048 max; 2049 fails.
     // C2048 is 2048 quarter-slots; one trailing C makes 2049.

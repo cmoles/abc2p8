@@ -13,5 +13,12 @@ export function parseAbc(abc: string, diagnostics: Diagnostics): ParsedAbc | nul
     diagnostics.error('parse', 'EMPTY_INPUT', 'No parseable tune content found in ABC input.');
     return null;
   }
+  if (tunes.length > 1) {
+    diagnostics.warn(
+      'parse',
+      'MULTIPLE_TUNES',
+      `Input contains ${tunes.length} tunes; only the first is converted.`,
+    );
+  }
   return { tune };
 }

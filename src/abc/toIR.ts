@@ -146,15 +146,27 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
       diagnostics.info('toIR', 'KEY_CHANGE', 'Mid-tune key change applied.');
       continue;
     }
-    if (item.el_type === 'meter' || item.el_type === 'tempo' || item.el_type === 'clef') {
+    if (item.el_type === 'meter') {
+      diagnostics.info(
+        'toIR',
+        'METER_CHANGE_IGNORED',
+        'Mid-tune meter change ignored; pico-8 has no meter concept.',
+      );
+      continue;
+    }
+    if (item.el_type === 'tempo') {
+      diagnostics.info(
+        'toIR',
+        'TEMPO_CHANGE_IGNORED',
+        'Mid-tune tempo change ignored; pico-8 SFX speed is set once per slot.',
+      );
+      continue;
+    }
+    if (item.el_type === 'clef') {
       continue;
     }
     if (!isVoiceItemNote(item)) {
-      diagnostics.info(
-        'toIR',
-        'DROPPED_ITEM',
-        `Dropped voice item of type "${item.el_type}".`,
-      );
+      diagnoseDroppedItem(item, diagnostics);
       continue;
     }
 
@@ -167,6 +179,8 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
       );
       continue;
     }
+
+    diagnoseNoteOrnaments(item, diagnostics);
 
     if (item.rest) {
       pendingTie = null;
@@ -360,6 +374,80 @@ function resolveQuarterBpm(tune: TuneObject, diagnostics: Diagnostics): number {
   // quarterBpm = bpm * (beatLen / 0.25)
   const quarterBpm = tempo.bpm * (beatLen / 0.25);
   return quarterBpm;
+}
+
+function diagnoseDroppedItem(item: VoiceItem, diagnostics: Diagnostics): void {
+  switch (item.el_type) {
+    case 'gap':
+      diagnostics.info('toIR', 'GAP_IGNORED', 'Voice gap (visual spacing) ignored.');
+      return;
+    case 'midi':
+      diagnostics.info(
+        'toIR',
+        'MIDI_DIRECTIVE_IGNORED',
+        '%%MIDI directive ignored; instrument selection is not yet wired through.',
+      );
+      return;
+    case 'overlay':
+      diagnostics.warn(
+        'toIR',
+        'OVERLAY_IGNORED',
+        'Voice overlay (& syntax) dropped; the overlaid notes will not be heard.',
+      );
+      return;
+    case 'part':
+      diagnostics.info(
+        'toIR',
+        'PART_DIRECTIVE_IGNORED',
+        'P: part marker ignored; abc2p8 does not yet expand part orderings.',
+      );
+      return;
+    case 'scale':
+      diagnostics.info('toIR', 'SCALE_DIRECTIVE_IGNORED', 'Scale directive ignored (visual only).');
+      return;
+    case 'stem':
+      diagnostics.info('toIR', 'STEM_DIRECTIVE_IGNORED', 'Stem directive ignored (visual only).');
+      return;
+    case 'style':
+      diagnostics.info('toIR', 'STYLE_DIRECTIVE_IGNORED', 'Style directive ignored (visual only).');
+      return;
+    case 'transpose':
+      diagnostics.warn(
+        'toIR',
+        'TRANSPOSE_IGNORED',
+        'Transpose directive ignored; pitches will not be shifted.',
+      );
+      return;
+    default:
+      diagnostics.warn(
+        'toIR',
+        'DROPPED_ITEM',
+        `Dropped voice item of unrecognized type "${item.el_type}".`,
+      );
+  }
+}
+
+interface NoteOrnaments {
+  decoration?: string[];
+  gracenotes?: unknown[];
+}
+
+function diagnoseNoteOrnaments(item: VoiceItemNote, diagnostics: Diagnostics): void {
+  const ornaments = item as unknown as NoteOrnaments;
+  if (ornaments.decoration && ornaments.decoration.length > 0) {
+    diagnostics.warn(
+      'toIR',
+      'DECORATION_DROPPED',
+      `Note decoration(s) dropped: ${ornaments.decoration.join(', ')}.`,
+    );
+  }
+  if (ornaments.gracenotes && ornaments.gracenotes.length > 0) {
+    diagnostics.warn(
+      'toIR',
+      'GRACE_NOTES_DROPPED',
+      `${ornaments.gracenotes.length} grace note(s) dropped.`,
+    );
+  }
 }
 
 function noteHasTie(item: VoiceItemNote): boolean {
