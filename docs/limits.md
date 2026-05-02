@@ -18,7 +18,7 @@ Severity levels:
 
 | Capability | Limit |
 |---|---|
-| Voices | exactly 1 (slice 3 will raise this to 4) |
+| Voices | up to 4 (one per pico-8 channel) |
 | Chords | not supported within a voice (slice 4) |
 | SFX slots | 64 total, 32 notes per slot |
 | Pitch range | C2–D#7 in Pico-8 editor notation (MIDI 36–87) |
@@ -43,7 +43,8 @@ Anything beyond these surfaces as one of the codes below.
 |---|---|---|
 | `NO_STAFF` | error | Tune parsed but has no staff content. |
 | `NO_VOICES` | error | Staff has no voice content. |
-| `MULTI_VOICE_UNSUPPORTED` | error | Tune declares 2+ `V:` voices. Lifts in slice 3. |
+| `TOO_MANY_VOICES` | error | Tune declares more than 4 `V:` voices; pico-8 has only 4 channels. |
+| `VOICE_REPEAT_MISMATCH` | warn | A non-V1 voice has different `\|: … :\|` bounds than V1; V1's bounds are used. |
 | `CHORD_UNSUPPORTED` | error | A chord (`[CEG]`) was found in monophonic mode. Lifts in slice 4. |
 | `OVERLAY_IGNORED` | warn | Voice overlay (`&` syntax) dropped — overlaid notes will not be heard. |
 | `TRANSPOSE_IGNORED` | warn | `%%transpose` directive ignored; pitches not shifted. |
@@ -86,7 +87,6 @@ Anything beyond these surfaces as one of the codes below.
 | Code | Severity | When it fires |
 |---|---|---|
 | `OUT_OF_RANGE` | error | A note is outside C2–D#7 and ±3 octaves of shifting can't bring it in. |
-| `CHANNEL_ALLOCATION_UNSUPPORTED` | error | Quantizer produced more than one voice; emitter is single-channel. Lifts in slice 3. |
 | `OUT_OF_RANGE_TRANSPOSED` | info | A note was octave-shifted to fit within Pico-8's pitch range. |
 
 ## Silently handled (no diagnostic, by design)
