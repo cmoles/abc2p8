@@ -65,20 +65,67 @@ the acceptance fixture of the next.
 - Voicing priority deferred — when over-budget the converter errors rather
   than picking which notes to drop. Edit the ABC to fit.
 
-## Slice 5 — Web playground
+## Slice 5 — Web playground (shipped)
 
-**Goal:** browser app — paste ABC, get a cart, hear it.
+- Vite-built static site at `web/`, deploys to GitHub Pages from `main` via
+  `.github/workflows/deploy-web.yml`.
+- Textarea for ABC, diagnostics list, copy/download `.p8` buttons.
+- Playback uses Pico-8's official HTML export (Pico-8 0.2.6, all-JS, no
+  WASM). At convert time we fetch the committed `runtime/shell.html` +
+  `runtime/shell.js`, rewrite the cart bytes inside `_cartdat` to splice in
+  the user's `__sfx__` and `__music__`, and load the patched runtime in an
+  iframe via `srcdoc`. Lua code stays untouched.
+- Cart byte layout (verified empirically during the spike): SFX slot is
+  `[notes(64) | header(4)]` (notes first, header at slot end). Music
+  channel byte in ROM is the same as in text format with the appropriate
+  flag bit OR'd into bit 7.
 
-- Vite-built static site, deploys to GitHub Pages from `main`.
-- Textarea for ABC, download/copy buttons for the `.p8`.
-- Optional: in-browser playback via a Pico-8 WASM player or by emitting WebAudio
-  from the IR directly (cheaper, but diverges from the cart).
-- No new pipeline features — purely a UI layer over `abcToPico8()`.
+## Slice 6 — Multi-track jukebox cart
 
-**Open questions**
-- Playback strategy (WASM vs. WebAudio-from-IR) — pick one before slice 5
-  starts.
-- Hosting: project page (`<user>.github.io/abc2p8`) vs. custom domain.
+**Goal:** one cart that bundles multiple ABC tunes, plus a track-picker
+running in Pico-8 Lua. The web playground grows a list-of-tunes UI; the
+library grows a `bundleToPico8` function. Cart code stays a constant
+build artifact — all per-bundle data flows through swappable byte regions.
+
+**Storage strategy.** Track metadata lives in the spritesheet region
+(`__gfx__`, `0x0000`–`0x1fff`, 8 KiB). The shell cart never renders
+sprites, so this region is free. Layout: 4-byte preamble (3-byte magic
+`'ABC'` + 1-byte track count `N`), followed by `N` × 18-byte fixed records
+of `{name[16] | music_start | music_count}`. Names are NUL-padded ASCII,
+≤16 chars. Max 64 tracks (one per music pattern); ~1.2 KiB used of the
+available 8.
+
+**Library work.**
+- New `src/pico8/metadata.ts` defining the byte format and an encoder.
+- New `bundleToPico8(tracks: TrackInput[], opts) → ConvertResult` in
+  `src/index.ts` where `TrackInput = { name: string, abc: string }`. Each
+  track runs through the existing `abcToPico8` pipeline; results are
+  sequenced into music slots `[0..M-1]`, `[M..M+M'-1]`, … with SFX indices
+  rebased per track. The existing single-track `abcToPico8` is the N=1
+  case without metadata.
+- Promote `rebaseMusicLine` from `scripts/build-sandbox-cart.ts:70-84` into
+  the library (shared between bundle and audition flows).
+- New diagnostic codes: `BUNDLE_OVERFLOW` (>64 music slots or >64 SFX
+  slots in aggregate, or >64 tracks), `NAME_TRUNCATED` (info — name was
+  longer than 16 chars).
+
+**Cart-patch additions.**
+- `extractRomRegions` learns about `__gfx__` and returns
+  `{ sfxBytes, musicBytes, gfxBytes }`. `gfxBytes` is `0x2000` long.
+- `patchCartRom` splices the gfx region at `0x0000`.
+
+**Shell cart rewrite.** `web/spike/shell.p8` becomes a small jukebox
+program. `_init` peeks the metadata at `0x0000`, parses into a Lua list.
+`_update60` handles up/down/play/stop. `_draw` renders a list with a
+selection cursor. Re-export to `web/public/runtime/`.
+
+**Web UI changes.** A "tracks" panel replacing the single textarea: list
+of `{name, abc}` rows, +/× to add/remove, drag-or-buttons to reorder. One
+"Build & Play" button calls `bundleToPico8` and feeds the result through
+the existing player.
+
+**Carried forward.** Slice 5's player module needs no changes — it just
+splices three byte regions instead of two.
 
 ## Not yet scoped
 

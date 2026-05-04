@@ -5,8 +5,22 @@ import { DEFAULT_INSTRUMENT, DEFAULT_VOLUME } from './pico8/constraints.js';
 import { emit } from './pico8/emit.js';
 import { quantize } from './pipeline/quantize.js';
 
-export type { Diagnostic, Severity, Stage, DiagnosticLocation } from './ir/diagnostics.js';
+export type {
+  Diagnostic,
+  DiagnosticLocation,
+  DiagnosticParts,
+  Severity,
+  Stage,
+} from './ir/diagnostics.js';
+export { formatDiagnosticParts, formatDiagnosticText } from './ir/diagnostics.js';
 export type { Note, Voice, Score, ScoreMeta, Effect } from './ir/types.js';
+export {
+  EMPTY_MUSIC_LINE,
+  EMPTY_SFX_LINE,
+  SECTION_MUSIC,
+  SECTION_SFX,
+  extractSection,
+} from './pico8/sections.js';
 
 export interface ConvertOptions {
   defaultInstrument?: number;

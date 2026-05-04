@@ -74,6 +74,9 @@ web_modules/
 .cache
 .parcel-cache
 
+# Web playground build output
+dist-web/
+
 # Next.js build output
 .next
 out

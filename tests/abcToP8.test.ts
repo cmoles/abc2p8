@@ -2,24 +2,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { abcToPico8 } from '../src/index.js';
+import { abcToPico8, extractSection } from '../src/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string): string =>
   readFileSync(resolve(here, 'fixtures/abc', name), 'utf8');
-
-function extractSection(p8: string, name: string): string[] {
-  const lines = p8.split('\n');
-  const start = lines.indexOf(name);
-  if (start < 0) return [];
-  const out: string[] = [];
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const l = lines[i]!;
-    if (l.startsWith('__') && l.endsWith('__')) break;
-    if (l !== '') out.push(l);
-  }
-  return out;
-}
 
 describe('abcToPico8 — slice 1', () => {
   it('emits a single sfx line and music pattern for a one-octave C major scale', () => {

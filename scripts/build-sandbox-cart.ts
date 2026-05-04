@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { abcToPico8 } from '../src/index.js';
+import { abcToPico8, EMPTY_MUSIC_LINE, EMPTY_SFX_LINE, extractSection } from '../src/index.js';
 
 interface Fixture {
   name: string;
@@ -48,24 +48,9 @@ const SLICES: Record<string, Fixture[]> = {
 };
 
 const TOTAL_SLOTS = 64;
-const EMPTY_SFX_LINE = '0'.repeat(168);
-const EMPTY_MUSIC_LINE = '00 40414243';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
-
-function extractSection(p8: string, name: string): string[] {
-  const lines = p8.split('\n');
-  const start = lines.indexOf(name);
-  if (start < 0) return [];
-  const out: string[] = [];
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const l = lines[i]!;
-    if (l.startsWith('__') && l.endsWith('__')) break;
-    if (l !== '') out.push(l);
-  }
-  return out;
-}
 
 function rebaseMusicLine(line: string, offset: number): string {
   const space = line.indexOf(' ');

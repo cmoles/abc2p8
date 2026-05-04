@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>abc2p8 — ABC → Pico-8 playground</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>abc2p8</h1>
+      <p class="tagline">Paste ABC notation, get a Pico-8 cart, hear it.</p>
+    </header>
+    <main>
+      <section class="editor">
+        <div class="editor-header">
+          <label for="abc">ABC source</label>
+          <label class="example-picker">
+            Load example:
+            <select id="examples"></select>
+          </label>
+        </div>
+        <textarea id="abc" spellcheck="false" autocomplete="off"></textarea>
+        <div class="controls">
+          <button id="convert" type="button">Convert</button>
+          <button id="stop" type="button" disabled>Stop</button>
+          <button id="copy" type="button" disabled>Copy .p8</button>
+          <button id="download" type="button" disabled>Download .p8</button>
+        </div>
+      </section>
+      <section class="output">
+        <h2>Diagnostics</h2>
+        <ul id="diagnostics" aria-live="polite"></ul>
+        <h2>Player</h2>
+        <p class="player-hint">
+          After clicking <strong>Convert</strong>, the Pico-8 player appears
+          below. Click the ▶ inside it to start playback — that gesture also
+          unlocks the browser's audio context.
+        </p>
+        <div id="player-host" hidden></div>
+      </section>
+    </main>
+    <footer>
+      <span>
+        Powered by
+        <a href="https://www.lexaloffle.com/pico-8.php" target="_blank" rel="noopener">
+          Pico-8
+        </a>
+        (Lexaloffle).
+      </span>
+    </footer>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

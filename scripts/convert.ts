@@ -1,7 +1,6 @@
 #!/usr/bin/env tsx
 import { readFileSync, writeFileSync } from 'node:fs';
-import type { Diagnostic } from '../src/index.js';
-import { abcToPico8 } from '../src/index.js';
+import { abcToPico8, formatDiagnosticText } from '../src/index.js';
 
 const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play]
 
@@ -60,19 +59,6 @@ function fatal(msg: string): never {
   process.exit(2);
 }
 
-function formatDiagnostic(d: Diagnostic): string {
-  const loc = d.location
-    ? ` [${[
-        d.location.voice,
-        d.location.tick !== undefined ? `tick ${d.location.tick}` : null,
-        d.location.line !== undefined ? `line ${d.location.line}` : null,
-      ]
-        .filter((x) => x !== null && x !== undefined)
-        .join(', ')}]`
-    : '';
-  return `${d.severity.toUpperCase()} ${d.stage}/${d.code}: ${d.message}${loc}`;
-}
-
 const args = parseArgs(process.argv.slice(2));
 const abc =
   args.input === '-' ? readFileSync(0, 'utf8') : readFileSync(args.input, 'utf8');
@@ -80,7 +66,7 @@ const result = abcToPico8(abc);
 
 for (const d of result.diagnostics) {
   if (args.quiet && d.severity === 'info') continue;
-  process.stderr.write(`${formatDiagnostic(d)}\n`);
+  process.stderr.write(`${formatDiagnosticText(d)}\n`);
 }
 
 if (result.diagnostics.some((d) => d.severity === 'error')) {
