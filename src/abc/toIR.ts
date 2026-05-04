@@ -92,8 +92,45 @@ function pitchToMidi(p: PitchObj, ctx: ConvertContext): number {
 }
 
 export const MAX_VOICES = 4;
+export const MAX_ARP_CHORD = 4;
 
-export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | null {
+export type ChordStrategy = 'auto' | 'expand' | 'arp';
+type ResolvedChordStrategy = 'expand' | 'arp';
+
+export interface ToIROptions {
+  chordStrategy?: ChordStrategy;
+}
+
+function resolveAutoStrategy(
+  allVoices: VoiceItem[][],
+  diagnostics: Diagnostics,
+): ResolvedChordStrategy {
+  let total = 0;
+  for (const items of allVoices) {
+    let maxArity = 1;
+    for (const item of items) {
+      if (!isVoiceItemNote(item)) continue;
+      if (item.rest) continue;
+      const pitches = (item.pitches as unknown[] | undefined) ?? [];
+      if (pitches.length > maxArity) maxArity = pitches.length;
+    }
+    total += maxArity;
+  }
+  if (total <= MAX_VOICES) return 'expand';
+  diagnostics.info(
+    'toIR',
+    'AUTO_ARP_FALLBACK',
+    `Expand mode would need ${total} channels (> ${MAX_VOICES}); auto-selected arp chord strategy.`,
+  );
+  return 'arp';
+}
+
+export function abcToScore(
+  tune: TuneObject,
+  diagnostics: Diagnostics,
+  opts: ToIROptions = {},
+): Score | null {
+  const requestedStrategy: ChordStrategy = opts.chordStrategy ?? 'auto';
   const firstStaff = tune.lines.find((l) => l.staff && l.staff.length > 0)?.staff?.[0];
   if (!firstStaff) {
     diagnostics.error('toIR', 'NO_STAFF', 'Tune has no staff content.');
@@ -116,10 +153,17 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
 
   const tempoBpm = resolveQuarterBpm(tune, diagnostics);
 
+  const chordStrategy: ResolvedChordStrategy =
+    requestedStrategy === 'auto'
+      ? resolveAutoStrategy(allVoices, diagnostics)
+      : requestedStrategy;
+
   const converted: VoiceConvertResult[] = [];
   for (let i = 0; i < allVoices.length; i += 1) {
     const id = `V${i + 1}`;
-    converted.push(convertVoiceItems(allVoices[i]!, firstStaff.key, id, diagnostics));
+    converted.push(
+      convertVoiceItems(allVoices[i]!, firstStaff.key, id, diagnostics, chordStrategy),
+    );
   }
 
   const totalChannels = converted.reduce((sum, c) => sum + c.siblings.length, 0);
@@ -127,10 +171,14 @@ export function abcToScore(tune: TuneObject, diagnostics: Diagnostics): Score | 
     const breakdown = converted
       .map((c, i) => `V${i + 1}=${c.siblings.length}`)
       .join(', ');
+    const arpHint =
+      chordStrategy === 'expand'
+        ? ' Drop chordStrategy: "expand" (or set "auto"/"arp") to let chords share a channel via Pico-8\'s arp effect.'
+        : '';
     diagnostics.error(
       'toIR',
       'CHORD_OVERFLOW',
-      `Chords need ${totalChannels} channels (${breakdown}); pico-8 has only ${MAX_VOICES}.`,
+      `Chords need ${totalChannels} channels (${breakdown}); pico-8 has only ${MAX_VOICES}.${arpHint}`,
     );
     return null;
   }
@@ -201,6 +249,7 @@ function convertVoiceItems(
   key: KeySignature | undefined,
   voiceId: string,
   diagnostics: Diagnostics,
+  chordStrategy: ResolvedChordStrategy,
 ): VoiceConvertResult {
   const ctx: ConvertContext = {
     diagnostics,
@@ -225,6 +274,43 @@ function convertVoiceItems(
   const pushRest = (siblingIdx: number, durationTicks: number): void => {
     siblings[siblingIdx]!.push({ startTick: cursor, durationTick: durationTicks, pitch: null });
     pendingTies[siblingIdx] = null;
+  };
+
+  const pushArpChord = (
+    midis: number[],
+    durationTicks: number,
+    staccato: boolean,
+    startsTie: boolean,
+  ): void => {
+    const lowest = midis[0]!;
+    const extras = midis.slice(1);
+    const extrasKey = extras.join(',');
+    const pendingTie = pendingTies[0];
+    const sameShape =
+      !!pendingTie &&
+      pendingTie.pitch === lowest &&
+      (pendingTie.extraPitches?.join(',') ?? '') === extrasKey;
+
+    let target: Note;
+    if (sameShape && pendingTie) {
+      pendingTie.durationTick += durationTicks;
+      if (staccato) pendingTie.staccato = true;
+      target = pendingTie;
+    } else {
+      const note: Note = { startTick: cursor, durationTick: durationTicks, pitch: lowest };
+      if (extras.length > 0) note.extraPitches = extras;
+      if (staccato) note.staccato = true;
+      siblings[0]!.push(note);
+      target = note;
+    }
+
+    if (startsTie) {
+      target.tiedToNext = true;
+      pendingTies[0] = target;
+    } else {
+      if (pendingTie) pendingTie.tiedToNext = false;
+      pendingTies[0] = null;
+    }
   };
 
   const pushPitch = (
@@ -332,10 +418,28 @@ function convertVoiceItems(
 
     const indexed = rawPitches.map((p) => ({ p, midi: pitchToMidi(p, ctx) }));
     indexed.sort((a, b) => a.midi - b.midi);
-    ensureSiblingCount(indexed.length);
 
     const itemTie = noteItemHasTie(item);
     const staccato = hasStaccato(item);
+    const startsTieAny = itemTie || indexed.some((e) => !!e.p.startTie);
+
+    if (chordStrategy === 'arp' && indexed.length > 1) {
+      let chordMidis = indexed.map((e) => e.midi);
+      if (chordMidis.length > MAX_ARP_CHORD) {
+        diagnostics.warn(
+          'toIR',
+          'CHORD_TOO_WIDE',
+          `Chord has ${chordMidis.length} pitches; arp truncated to lowest ${MAX_ARP_CHORD}.`,
+          { voice: voiceId },
+        );
+        chordMidis = chordMidis.slice(0, MAX_ARP_CHORD);
+      }
+      pushArpChord(chordMidis, durationTicks, staccato, startsTieAny);
+      cursor += durationTicks;
+      continue;
+    }
+
+    ensureSiblingCount(indexed.length);
 
     for (let i = 0; i < siblings.length; i += 1) {
       if (i < indexed.length) {

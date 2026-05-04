@@ -666,10 +666,11 @@ describe('abcToPico8 — slice 4', () => {
     expect(music[0]).toBe('04 00010203');
   });
 
-  it('errors when the total channel demand exceeds 4', () => {
-    // 5-note chord — sole voice but 5 > 4 channels.
+  it('errors when expand mode is forced and the total channel demand exceeds 4', () => {
+    // 5-note chord — sole voice but 5 > 4 channels. Auto would fall back to
+    // arp; explicit 'expand' keeps the channel-overflow error.
     const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n[CEGce]|';
-    const result = abcToPico8(abc);
+    const result = abcToPico8(abc, { chordStrategy: 'expand' });
     expect(result.p8).toBe('');
     expect(
       result.diagnostics.some(
@@ -697,19 +698,183 @@ describe('abcToPico8 — slice 4', () => {
     ]);
   });
 
-  it('errors when chord arity plus voice count exceeds 4', () => {
+  it('errors when expand is forced and chord arity plus voice count exceeds 4', () => {
     // 3-note chord in V1 + monophonic V2 + monophonic V3 = 5 channels.
     const abc =
       'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
       'V:1\n[CEG]|\n' +
       'V:2\nc|\n' +
       'V:3\ne|\n';
-    const result = abcToPico8(abc);
+    const result = abcToPico8(abc, { chordStrategy: 'expand' });
     expect(result.p8).toBe('');
     expect(
       result.diagnostics.some(
         (d) => d.severity === 'error' && d.code === 'CHORD_OVERFLOW',
       ),
     ).toBe(true);
+  });
+});
+
+describe('abcToPico8 — slice 4 arp', () => {
+  it('encodes a triad as one channel with effect=6 across an aligned-4 group', () => {
+    // [CEG]4 lasts a whole note. With one chord event, chordGCD = 192 ticks →
+    // arpDivisor = 48; durGCD = 192; slotTicks = gcd(192, 48) = 48 (quarter
+    // grid). 4 slots, all in arp group 0–3. Padded chord = [C, E, G, C].
+    const result = abcToPico8(fixture('chord-arp-triad.abc'), {
+      chordStrategy: 'arp',
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    // Single channel — arp collapses the triad onto one SFX line.
+    expect(sfx).toHaveLength(1);
+    expect(music).toHaveLength(1);
+
+    const line = sfx[0]!;
+    // Header: editor=01, speed=3c (60), loop_start=04 (4 slots), loop_end=00.
+    expect(line.slice(0, 8)).toBe('013c0400');
+
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    // Each slot's pitch = chord[groupOffset]; effect = 6 (arp fast).
+    // C=0x18, E=0x1c, G=0x1f. Padded order: C, E, G, C.
+    expect([0, 1, 2, 3].map(slot)).toEqual([
+      '18056', '1c056', '1f056', '18056',
+    ]);
+    // Stop flag, channel 0 plays sfx 0, others silent.
+    expect(music[0]).toBe('04 00414243');
+  });
+
+  it('selects effect=7 (arp slow) when arpSpeed: "slow"', () => {
+    const result = abcToPico8(fixture('chord-arp-triad.abc'), {
+      chordStrategy: 'arp',
+      arpSpeed: 'slow',
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    expect([0, 1, 2, 3].map(slot)).toEqual([
+      '18057', '1c057', '1f057', '18057',
+    ]);
+  });
+
+  it('mixes a chord-arp voice with a monophonic bass on a separate channel', () => {
+    // V1 = [CEG]4 → 1 channel. V2 = C,4 (sustained C2) → 1 channel.
+    const result = abcToPico8(fixture('chord-arp-with-bass.abc'), {
+      chordStrategy: 'arp',
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(2);
+    expect(music).toHaveLength(1);
+
+    const slot = (line: string, i: number): string =>
+      line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    // V1 chord arp (same as triad fixture).
+    expect([0, 1, 2, 3].map((i) => slot(sfx[0]!, i))).toEqual([
+      '18056', '1c056', '1f056', '18056',
+    ]);
+    // V2: C, = C3 sustained for 4 slots (MIDI 48 → pico-8 pitch 12 = 0x0c).
+    // First slot is the only onset; continuations don't retrigger because
+    // they're part of the same IR note.
+    expect([0, 1, 2, 3].map((i) => slot(sfx[1]!, i))).toEqual([
+      '0c050', '0c050', '0c050', '0c050',
+    ]);
+    // Channels [v1, v2, silent, silent].
+    expect(music[0]).toBe('04 00014243');
+  });
+
+  it('chord-bearing voice that would CHORD_OVERFLOW in expand mode fits in arp mode', () => {
+    // 3 voices, V2 has triads. expand: 1 + 3 + 1 = 5 channels → CHORD_OVERFLOW.
+    // arp: 1 + 1 + 1 = 3 channels → fits.
+    const result = abcToPico8(fixture('shadowed-alleys.abc'), {
+      chordStrategy: 'arp',
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    // Slot grid 12 ticks (1/16). Total length 1536 ticks → 128 slots/voice →
+    // 4 SFX blocks per voice. 3 voices × 4 = 12 SFX lines, 4 music patterns.
+    expect(sfx).toHaveLength(12);
+    expect(music).toHaveLength(4);
+
+    // Whole-tune repeat: first pattern has begin-loop, last has end-loop.
+    expect(music[0]!.startsWith('01 ')).toBe(true);
+    expect(music[3]!.startsWith('02 ')).toBe(true);
+  });
+
+  it('errors with ARP_GRID_INFEASIBLE when chord onsets cannot 4-align', () => {
+    // Three eighth-rest then an eighth-note triad: chord onset = 72 ticks.
+    // chordGCD = gcd(72 onset, 24 duration) = 24; 24 % 4 != 0 → infeasible.
+    // (TPQ=48; eighth=24 ticks. 24 isn't divisible by 4 — actually it is.
+    //  Use a less-aligned onset: a chord at 1/16 offset.)
+    // Use 1/16 offset: z/4 (a sixteenth rest = 12 ticks) before the chord.
+    // Onset at tick 12 → arpAlignTicks = [12, durationTicks].
+    // gcd(12, 24) = 12; 12 % 4 = 0 → divides cleanly… still works.
+    // Need a true non-multiple-of-4. Use z/8 (a 32nd rest = 6 ticks) so onset = 6.
+    // gcd(6, …) = some-divisor; 6 % 4 = 2, infeasible.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nz/8 [CEG]7/8|';
+    const result = abcToPico8(abc, { chordStrategy: 'arp' });
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'ARP_GRID_INFEASIBLE',
+      ),
+    ).toBe(true);
+  });
+
+  it('truncates a 5-note chord to the lowest 4 with CHORD_TOO_WIDE', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n[CEGce]4|';
+    const result = abcToPico8(abc, { chordStrategy: 'arp' });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'warn' && d.code === 'CHORD_TOO_WIDE',
+      ),
+    ).toBe(true);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    const slot = (i: number): string => line.slice(8 + i * 5, 8 + (i + 1) * 5);
+    // Lowest 4: C(60), E(64), G(67), c(72). The top "e" (76) drops.
+    // Pico-8 pitches: 24, 28, 31, 36 → hex 18, 1c, 1f, 24.
+    expect([0, 1, 2, 3].map(slot)).toEqual([
+      '18056', '1c056', '1f056', '24056',
+    ]);
+  });
+
+  it('default strategy is "auto" and uses expand for tunes that fit in 4 channels', () => {
+    // Single-voice triad: max arity 3 ≤ 4. Auto picks expand → 3 SFX lines.
+    const result = abcToPico8(fixture('chord-arp-triad.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some((d) => d.code === 'AUTO_ARP_FALLBACK'),
+    ).toBe(false);
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(3);
+  });
+
+  it('auto falls back to arp when expand would exceed 4 channels', () => {
+    // V1 triad (3) + V2 mono (1) + V3 mono (1) = 5 channels. Auto must pick arp.
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\n[CEG]4|\n' +
+      'V:2\nc4|\n' +
+      'V:3\nE,4|\n';
+    const result = abcToPico8(abc);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'info' && d.code === 'AUTO_ARP_FALLBACK',
+      ),
+    ).toBe(true);
+    // After fallback: 3 channels (1 per voice), so 3 SFX lines, 1 pattern.
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(3);
+    const music = extractSection(result.p8, '__music__');
+    expect(music[0]).toBe('04 00010243');
   });
 });

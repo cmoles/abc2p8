@@ -134,6 +134,16 @@ textarea {
   gap: 0.5rem;
   margin-top: 0.75rem;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.arp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-left: auto;
 }
 
 button {

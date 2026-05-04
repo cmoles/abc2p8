@@ -3,6 +3,8 @@ import type { QuantizedScore, QuantizedSlot, QuantizedVoice } from '../pipeline/
 import {
   CHANNEL_COUNT,
   DEFAULT_EFFECT,
+  EFFECT_ARP_FAST,
+  EFFECT_ARP_SLOW,
   EFFECT_FADE_IN,
   EFFECT_FADE_OUT,
   PICO8_MIDI_OFFSET,
@@ -22,6 +24,7 @@ import {
 export interface EmitOptions {
   defaultInstrument: number;
   defaultVolume: number;
+  arpSpeed: 'fast' | 'slow';
 }
 
 export function emit(
@@ -84,19 +87,27 @@ function emitSfxLine(
     if (pitch === null) {
       notes.push({ pitch: 0, waveform: 0, volume: 0, effect: 0 });
     } else {
-      // Pico-8 sustains across same-pitch slots — going from C3 vol=5 to C3
-      // vol=5 with no effect plays as one merged tone, losing the second
-      // onset. To preserve the source's note boundaries, force a retrigger
-      // on onset slots whose previous slot in the same SFX has the same
-      // pitch. Default to fade-in; staccato sources prefer fade-out.
-      const prev = i > 0 ? slots[i - 1]! : null;
-      const samePrev = prev !== null && prev.pitch === slot.pitch;
-      const needsRetrigger = !!slot.isOnset && samePrev;
-      const effect = needsRetrigger
-        ? slot.onsetStaccato
-          ? EFFECT_FADE_OUT
-          : EFFECT_FADE_IN
-        : DEFAULT_EFFECT;
+      let effect: number;
+      if (slot.arpChord) {
+        // Arp slots play through the 4 SFX positions of their aligned-4 group;
+        // the slot's own pitch is already set to the position-in-group pitch
+        // by the quantizer, so we just stamp the arp effect.
+        effect = opts.arpSpeed === 'slow' ? EFFECT_ARP_SLOW : EFFECT_ARP_FAST;
+      } else {
+        // Pico-8 sustains across same-pitch slots — going from C3 vol=5 to C3
+        // vol=5 with no effect plays as one merged tone, losing the second
+        // onset. To preserve the source's note boundaries, force a retrigger
+        // on onset slots whose previous slot in the same SFX has the same
+        // pitch. Default to fade-in; staccato sources prefer fade-out.
+        const prev = i > 0 ? slots[i - 1]! : null;
+        const samePrev = prev !== null && prev.pitch === slot.pitch;
+        const needsRetrigger = !!slot.isOnset && samePrev;
+        effect = needsRetrigger
+          ? slot.onsetStaccato
+            ? EFFECT_FADE_OUT
+            : EFFECT_FADE_IN
+          : DEFAULT_EFFECT;
+      }
       notes.push({
         pitch,
         waveform: opts.defaultInstrument,

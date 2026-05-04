@@ -9,6 +9,7 @@ const convertBtn = document.getElementById('convert') as HTMLButtonElement;
 const stopBtn = document.getElementById('stop') as HTMLButtonElement;
 const copyBtn = document.getElementById('copy') as HTMLButtonElement;
 const downloadBtn = document.getElementById('download') as HTMLButtonElement;
+const chordArpToggle = document.getElementById('chord-arp') as HTMLInputElement;
 const diagnosticsList = document.getElementById('diagnostics') as HTMLUListElement;
 const playerHost = document.getElementById('player-host') as HTMLDivElement;
 
@@ -36,7 +37,9 @@ examplesSelect.addEventListener('change', () => {
 });
 
 convertBtn.addEventListener('click', async () => {
-  const result = abcToPico8(abcInput.value);
+  const result = abcToPico8(abcInput.value, {
+    chordStrategy: chordArpToggle.checked ? 'arp' : 'auto',
+  });
   renderDiagnostics(diagnosticsList, result.diagnostics);
   const hasErrors = result.diagnostics.some((d: Diagnostic) => d.severity === 'error');
   if (hasErrors || result.p8 === '') {

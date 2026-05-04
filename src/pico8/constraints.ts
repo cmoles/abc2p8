@@ -28,6 +28,11 @@ export const EFFECT_MAX = 7;
 export const EFFECT_NONE = 0;
 export const EFFECT_FADE_IN = 4;
 export const EFFECT_FADE_OUT = 5;
+// Arp cycles the 4 notes of the slot's aligned-4 group (slots 0–3, 4–7, …)
+// at a fixed internal speed within each slot's duration.
+export const EFFECT_ARP_FAST = 6;
+export const EFFECT_ARP_SLOW = 7;
+export const ARP_GROUP_SIZE = 4;
 
 // Pico-8 plays one SFX tick every ~1/120 second (183 samples / 22050 Hz).
 export const PICO8_TICKS_PER_SECOND = 120;

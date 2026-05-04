@@ -65,6 +65,32 @@ the acceptance fixture of the next.
 - Voicing priority deferred — when over-budget the converter errors rather
   than picking which notes to drop. Edit the ABC to fit.
 
+### Slice 4.5 — Chord arp (shipped)
+
+- `chordStrategy` option with three values: `'auto'` (default), `'expand'`,
+  `'arp'`. Auto picks expand when per-voice chord arities sum to ≤ 4 channels
+  and arp otherwise; the fallback emits `AUTO_ARP_FALLBACK` info so the user
+  knows which path ran. Arp encodes each chord on a single channel using
+  Pico-8's arp effect (6 fast / 7 slow), trading sibling channels for one
+  shared SFX layout.
+- Quantizer picks a slot grid where chord onsets and durations are multiples
+  of 4 slots — Pico-8's arp aligns to absolute SFX positions 0–3, 4–7, …, so
+  each chord owns one or more 4-slot groups. Constraint:
+  `gcd(chord onsets ∪ chord durations) % 4 == 0`. Repeat boundaries are folded
+  in too. `ARP_GRID_INFEASIBLE` if the grid would have to go below the
+  32nd-note floor.
+- Each slot in a chord 4-group is stamped with the SFX pitch at its position
+  (chord pitches in arp order, padded by repeating the root to 4 notes). The
+  emitter writes effect=6/7 on slots that are part of the chord; the per-slot
+  pitch already encodes the right "arp position" pitch so the SFX layout is
+  self-consistent.
+- Chords with >4 pitches truncate to the lowest 4 with `CHORD_TOO_WIDE`.
+- Channel budget in arp mode = number of source voices (1 chord-bearing voice
+  uses 1 channel regardless of arity), so 3-voice tunes with triad comping
+  (which would need 5 channels in expand mode) now fit.
+- Wired into the audition CLI as `--arp` / `--arp-slow` (force arp; default
+  is auto) and the web playground as a "Force arp on chords" toggle.
+
 ## Slice 5 — Web playground (shipped)
 
 - Vite-built static site at `web/`, deploys to GitHub Pages from `main` via

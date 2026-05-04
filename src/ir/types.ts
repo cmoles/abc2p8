@@ -17,6 +17,10 @@ export interface Note {
   effect?: Effect;
   tiedToNext?: boolean;
   staccato?: boolean;
+  // Chord pitches above `pitch`, sorted ascending (MIDI). Set only when the
+  // pipeline is in arp chord mode; the quantizer/emitter render the note as a
+  // single-channel arpeggio rather than expanding to sibling voices.
+  extraPitches?: number[];
 }
 
 export interface Voice {

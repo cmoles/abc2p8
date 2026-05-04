@@ -1,6 +1,7 @@
 import type { Diagnostics } from '../ir/diagnostics.js';
 import type { Note, RepeatRegion, Score, Voice } from '../ir/types.js';
 import {
+  ARP_GROUP_SIZE,
   PICO8_TICKS_PER_SECOND,
   SFX_NOTES_PER_SLOT,
   SFX_SLOTS,
@@ -26,6 +27,11 @@ export interface QuantizedSlot {
   // with no isOnset boundary plays as one sustained tone in pico-8.
   isOnset?: boolean;
   onsetStaccato?: boolean;
+  // Set on every slot inside an arp chord group. Length = ARP_GROUP_SIZE; the
+  // i-th entry is the SFX pitch at position (groupStart + i). The slot's own
+  // `pitch` mirrors arpChord[groupOffset] so downstream layouts stay self-
+  // consistent. Emitter stamps these into the SFX and sets effect=arpFast/Slow.
+  arpChord?: number[];
 }
 
 const MIN_SLOT_TICKS_FALLBACK = 12; // 16th note at TICKS_PER_QUARTER=48
@@ -49,31 +55,69 @@ function gcdAll(values: number[]): number {
   return acc;
 }
 
-function chooseSlotTicks(score: Score, diagnostics: Diagnostics): number {
+function chooseSlotTicks(score: Score, diagnostics: Diagnostics): number | null {
   const durations: number[] = [];
+  const arpAlignTicks: number[] = [];
   for (const v of score.voices) {
-    for (const n of v.notes) durations.push(n.durationTick);
+    for (const n of v.notes) {
+      durations.push(n.durationTick);
+      if (n.extraPitches && n.extraPitches.length > 0) {
+        arpAlignTicks.push(n.durationTick);
+        if (n.startTick > 0) arpAlignTicks.push(n.startTick);
+      }
+    }
   }
   if (durations.length === 0) return MIN_SLOT_TICKS_FALLBACK;
 
+  // When arp chords are present, loop boundaries also have to land on a
+  // 4-aligned slot — otherwise the cycle restarts mid-pattern at the loop
+  // jump and the chord audibly skips.
+  if (arpAlignTicks.length > 0 && score.repeat) {
+    if (score.repeat.startTick > 0) arpAlignTicks.push(score.repeat.startTick);
+    if (score.repeat.endTick > 0) arpAlignTicks.push(score.repeat.endTick);
+  }
+
+  let arpDivisor: number | null = null;
+  if (arpAlignTicks.length > 0) {
+    const arpGCD = gcdAll(arpAlignTicks);
+    if (arpGCD <= 0 || arpGCD % ARP_GROUP_SIZE !== 0) {
+      diagnostics.error(
+        'quantize',
+        'ARP_GRID_INFEASIBLE',
+        `Chord arp needs onset/duration GCD divisible by ${ARP_GROUP_SIZE}; got ${arpGCD} ticks.`,
+      );
+      return null;
+    }
+    arpDivisor = arpGCD / ARP_GROUP_SIZE;
+  }
+
   const g = gcdAll(durations);
   if (g <= 0) return MIN_SLOT_TICKS_FALLBACK;
+  const candidate = arpDivisor === null ? g : gcd(g, arpDivisor);
 
   // Don't go finer than a 32nd note (6 ticks at TPQ=48) or coarser than a quarter (48).
   const minSlot = Math.max(1, Math.floor(score.ticksPerQuarter / 8));
   const maxSlot = score.ticksPerQuarter;
-  if (g < minSlot) {
+  if (candidate < minSlot) {
+    if (arpDivisor !== null) {
+      diagnostics.error(
+        'quantize',
+        'ARP_GRID_INFEASIBLE',
+        `Arp 4-alignment requires a ${candidate}-tick slot grid, finer than the ${minSlot}-tick floor.`,
+      );
+      return null;
+    }
     diagnostics.info(
       'quantize',
       'SLOT_RAISED',
-      `GCD of durations (${g} ticks) finer than 32nd note; using ${minSlot} ticks.`,
+      `GCD of durations (${candidate} ticks) finer than 32nd note; using ${minSlot} ticks.`,
     );
     return minSlot;
   }
-  if (g > maxSlot) {
+  if (candidate > maxSlot) {
     return maxSlot;
   }
-  return g;
+  return candidate;
 }
 
 function speedFromSlot(slotTicks: number, ticksPerQuarter: number, quarterBpm: number): number {
@@ -84,6 +128,7 @@ function speedFromSlot(slotTicks: number, ticksPerQuarter: number, quarterBpm: n
 
 export function quantize(score: Score, diagnostics: Diagnostics): QuantizedScore | null {
   const slotTicks = chooseSlotTicks(score, diagnostics);
+  if (slotTicks === null) return null;
   const rawSpeed = speedFromSlot(slotTicks, score.ticksPerQuarter, score.tempoBpm);
   const speed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, Math.round(rawSpeed)));
 
@@ -178,6 +223,14 @@ export function quantize(score: Score, diagnostics: Diagnostics): QuantizedScore
   return loop ? { speed, voices, loop } : { speed, voices };
 }
 
+function padArpPitches(pitches: number[]): number[] {
+  const result: number[] = [];
+  for (let i = 0; i < ARP_GROUP_SIZE; i += 1) {
+    result.push(pitches[i % pitches.length]!);
+  }
+  return result;
+}
+
 function quantizeVoice(
   voice: Voice,
   slotTicks: number,
@@ -210,6 +263,34 @@ function quantizeVoice(
     while (slots.length < startSlot) {
       slots.push({ pitch: null });
     }
+
+    const isArpChord = !!note.extraPitches && note.extraPitches.length > 0 && note.pitch !== null;
+    if (isArpChord) {
+      if (startSlot % ARP_GROUP_SIZE !== 0 || span % ARP_GROUP_SIZE !== 0) {
+        diagnostics.error(
+          'quantize',
+          'ARP_GRID_INFEASIBLE',
+          `Chord at tick ${note.startTick} (slot ${startSlot}, span ${span}) does not align to ${ARP_GROUP_SIZE}-slot arp groups.`,
+          { tick: note.startTick, voice: voice.id },
+        );
+        return null;
+      }
+      const chordPitches = padArpPitches([note.pitch!, ...(note.extraPitches ?? [])]);
+      for (let i = 0; i < span; i += 1) {
+        const groupOffset = (startSlot + i) % ARP_GROUP_SIZE;
+        const slot: QuantizedSlot = {
+          pitch: chordPitches[groupOffset]!,
+          arpChord: chordPitches,
+        };
+        if (i === 0) {
+          slot.isOnset = true;
+          if (note.staccato) slot.onsetStaccato = true;
+        }
+        slots.push(slot);
+      }
+      continue;
+    }
+
     for (let i = 0; i < span; i += 1) {
       const slot: QuantizedSlot = { pitch: note.pitch };
       if (i === 0 && note.pitch !== null) {
