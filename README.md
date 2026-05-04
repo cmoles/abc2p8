@@ -24,7 +24,7 @@ const { p8, diagnostics } = abcToPico8(abcSource);
 ## Limitations
 
 abc2p8 is built in vertical slices; each slice lifts a class of restrictions.
-Slices 1–4 are shipped:
+Slices 1–6 are shipped:
 
 - **Up to 4 voices** (one per Pico-8 channel). `V:1`…`V:4` map to channels in
   declaration order; more than 4 errors with `TOO_MANY_VOICES`.
@@ -36,6 +36,9 @@ Slices 1–4 are shipped:
 - **One repeat region per tune.** `|: … :|` becomes a Pico-8 begin/end-loop. Multiple regions warn and keep the first; content after `:|` is dropped.
 - **Ornaments and grace notes are dropped** with `DECORATION_DROPPED` / `GRACE_NOTES_DROPPED` warnings.
 - **Mid-tune tempo and meter changes are ignored.**
+- **Per-voice instruments** via `voices: [{ instrument: 0..7 }]` opts, the
+  `--instrument 0:2,1:5` CLI flag, or `%%pico8 instrument N W` directives in
+  the ABC source. Unset voices fall back to `defaultInstrument`.
 
 For the full list of diagnostic codes, severities, and what each one means,
 see [docs/limits.md](docs/limits.md). The roadmap of upcoming slices lives

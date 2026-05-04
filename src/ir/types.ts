@@ -26,7 +26,7 @@ export interface Note {
 export interface Voice {
   id: string;
   notes: Note[];
-  defaultInstrument?: number;
+  instrument?: number;
 }
 
 export interface ScoreMeta {

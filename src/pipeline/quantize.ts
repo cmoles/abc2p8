@@ -18,6 +18,7 @@ export interface QuantizedScore {
 export interface QuantizedVoice {
   id: string;
   blocks: QuantizedSlot[][];
+  instrument?: number;
 }
 
 export interface QuantizedSlot {
@@ -190,10 +191,13 @@ export function quantize(score: Score, diagnostics: Diagnostics): QuantizedScore
   const blockBoundaries = computeBlockBoundaries(totalSlots, forced);
   const blocksPerVoice = blockBoundaries.length;
 
-  const voices: QuantizedVoice[] = voiceSlots.map((v) => ({
-    id: v.id,
-    blocks: blockBoundaries.map(([s, e]) => v.slots.slice(s, e)),
-  }));
+  const voices: QuantizedVoice[] = voiceSlots.map((v, i) => {
+    const source = score.voices[i]!;
+    const block = blockBoundaries.map(([s, e]) => v.slots.slice(s, e));
+    return source.instrument !== undefined
+      ? { id: v.id, blocks: block, instrument: source.instrument }
+      : { id: v.id, blocks: block };
+  });
 
   const totalBlocks = voices.length * blocksPerVoice;
   if (totalBlocks > SFX_SLOTS) {

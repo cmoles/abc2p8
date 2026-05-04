@@ -61,8 +61,9 @@ export function emit(
   const sfxLines: string[] = [];
   for (let v = 0; v < q.voices.length; v += 1) {
     const voice = q.voices[v]!;
+    const waveform = voice.instrument ?? opts.defaultInstrument;
     for (let b = 0; b < voice.blocks.length; b += 1) {
-      const line = emitSfxLine(voice.blocks[b]!, voice.id, q.speed, diagnostics, opts);
+      const line = emitSfxLine(voice.blocks[b]!, voice.id, q.speed, waveform, diagnostics, opts);
       if (line === null) return null;
       sfxLines.push(line);
     }
@@ -76,6 +77,7 @@ function emitSfxLine(
   slots: QuantizedSlot[],
   voiceId: string,
   speed: number,
+  waveform: number,
   diagnostics: Diagnostics,
   opts: EmitOptions,
 ): string | null {
@@ -110,7 +112,7 @@ function emitSfxLine(
       }
       notes.push({
         pitch,
-        waveform: opts.defaultInstrument,
+        waveform,
         volume: opts.defaultVolume,
         effect,
       });

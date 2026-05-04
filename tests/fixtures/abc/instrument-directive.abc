@@ -1,0 +1,12 @@
+X:1
+T:Voice-instrument directive
+M:4/4
+L:1/4
+Q:1/4=120
+%%pico8 instrument 1 2
+%%pico8 instrument 2 5
+K:C
+V:1
+CDEF|
+V:2
+GABc|

@@ -878,3 +878,115 @@ describe('abcToPico8 — slice 4 arp', () => {
     expect(music[0]).toBe('04 00010243');
   });
 });
+
+// SFX line layout: 8-char header + 32 slots × 5 hex chars (pitch2 wave1 vol1 eff1).
+function slotWaveform(line: string, slotIdx: number): number {
+  return parseInt(line.slice(8 + slotIdx * 5 + 2, 8 + slotIdx * 5 + 3), 16);
+}
+
+describe('abcToPico8 — slice 6 (per-voice instruments)', () => {
+  it('applies opts.voices[i].instrument as the SFX waveform for each voice', () => {
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nCDEF|\nV:2\nGABc|\n';
+    const result = abcToPico8(abc, {
+      voices: [{ instrument: 2 }, { instrument: 5 }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(2);
+    // Every occupied slot in V1's SFX uses waveform 2; V2's uses waveform 5.
+    for (let i = 0; i < 4; i += 1) expect(slotWaveform(sfx[0]!, i)).toBe(2);
+    for (let i = 0; i < 4; i += 1) expect(slotWaveform(sfx[1]!, i)).toBe(5);
+  });
+
+  it('honors %%pico8 instrument directives in the ABC source', () => {
+    const result = abcToPico8(fixture('instrument-directive.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(2);
+    expect(slotWaveform(sfx[0]!, 0)).toBe(2);
+    expect(slotWaveform(sfx[1]!, 0)).toBe(5);
+  });
+
+  it('opts.voices win over the %%pico8 instrument directive', () => {
+    const result = abcToPico8(fixture('instrument-directive.abc'), {
+      voices: [{ instrument: 7 }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    // V1 overridden to 7; V2 keeps the directive's 5.
+    expect(slotWaveform(sfx[0]!, 0)).toBe(7);
+    expect(slotWaveform(sfx[1]!, 0)).toBe(5);
+  });
+
+  it('falls back to defaultInstrument when a voice has no override', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nCDEF|\n';
+    const result = abcToPico8(abc, { defaultInstrument: 3 });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(slotWaveform(sfx[0]!, 0)).toBe(3);
+  });
+
+  it('chord-expand siblings inherit the source voice\'s instrument', () => {
+    // [CEG] in expand mode → 3 sibling channels, all under V1 → all waveform 4.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n[CEG]4|\n';
+    const result = abcToPico8(abc, {
+      chordStrategy: 'expand',
+      voices: [{ instrument: 4 }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(3);
+    for (const line of sfx) expect(slotWaveform(line, 0)).toBe(4);
+  });
+
+  it('arp-mode chord uses the chord-bearing voice\'s instrument', () => {
+    const result = abcToPico8(fixture('chord-arp-triad.abc'), {
+      chordStrategy: 'arp',
+      voices: [{ instrument: 6 }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(1);
+    // All four arp slots in the group share waveform 6.
+    for (let i = 0; i < 4; i += 1) expect(slotWaveform(sfx[0]!, i)).toBe(6);
+  });
+
+  it('errors with INSTRUMENT_OUT_OF_RANGE when opts.voices waveform is out of 0–7', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nC4|\n';
+    const result = abcToPico8(abc, { voices: [{ instrument: 9 }] });
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'INSTRUMENT_OUT_OF_RANGE',
+      ),
+    ).toBe(true);
+  });
+
+  it('errors with INSTRUMENT_OUT_OF_RANGE when directive waveform is out of 0–7', () => {
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\n%%pico8 instrument 1 12\nK:C\nC4|\n';
+    const result = abcToPico8(abc);
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'INSTRUMENT_OUT_OF_RANGE',
+      ),
+    ).toBe(true);
+  });
+
+  it('errors with INSTRUMENT_DIRECTIVE_INVALID when directive is malformed', () => {
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\n%%pico8 instrument 1\nK:C\nC4|\n';
+    const result = abcToPico8(abc);
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'INSTRUMENT_DIRECTIVE_INVALID',
+      ),
+    ).toBe(true);
+  });
+});

@@ -106,56 +106,94 @@ the acceptance fixture of the next.
   channel byte in ROM is the same as in text format with the appropriate
   flag bit OR'd into bit 7.
 
-## Slice 6 — Multi-track jukebox cart
+## Slice 6 — Per-voice instrument selection (shipped)
 
-**Goal:** one cart that bundles multiple ABC tunes, plus a track-picker
-running in Pico-8 Lua. The web playground grows a list-of-tunes UI; the
-library grows a `bundleToPico8` function. Cart code stays a constant
-build artifact — all per-bundle data flows through swappable byte regions.
+- Each voice gets its own Pico-8 waveform (0–7) instead of every voice
+  sharing `defaultInstrument`. Specified in `abcToPico8` opts as
+  `voices: [{ instrument: 2 }, ...]`; entries left unset fall back to
+  `defaultInstrument` (which itself defaults to 0 / sine).
+- ABC custom directive `%%pico8 instrument <voiceNumber> <waveform>` is
+  honored as input (1-based voice numbers matching `V:1`, `V:2`, …; the
+  directive is stripped before abcjs parses). Standard `%%MIDI program N`
+  continues to emit `MIDI_DIRECTIVE_IGNORED` — the GM→Pico-8 mapping is
+  too lossy to be a default, so users opt into the custom directive when
+  they care. `voices[i].instrument` wins over the directive.
+- IR carries `instrument` on the `Voice`. Quantize is unchanged. Emitter
+  stamps the per-voice waveform on every slot in that voice's SFX blocks.
+  Chord-expand siblings inherit their parent voice's instrument; arp mode
+  is single-channel, so the chord plays on one waveform too.
+- CLI: `--instrument 0:2,1:5` (voice-index : waveform pairs, 0-based).
+  Playground: one waveform dropdown per detected voice, rendered after
+  conversion and persisted across re-converts within the session.
+- New diagnostics: `INSTRUMENT_OUT_OF_RANGE` (waveform outside 0–7) and
+  `INSTRUMENT_DIRECTIVE_INVALID` (malformed `%%pico8 instrument` line).
 
-**Storage strategy.** Track metadata lives in the spritesheet region
-(`__gfx__`, `0x0000`–`0x1fff`, 8 KiB). The shell cart never renders
-sprites, so this region is free. Layout: 4-byte preamble (3-byte magic
-`'ABC'` + 1-byte track count `N`), followed by `N` × 18-byte fixed records
-of `{name[16] | music_start | music_count}`. Names are NUL-padded ASCII,
-≤16 chars. Max 64 tracks (one per music pattern); ~1.2 KiB used of the
-available 8.
+**Resolved decisions**
+- Per-note instrument overrides (varying waveform within a voice) are out
+  of scope. The IR keeps `instrument` at the `Voice` level; per-slot
+  waveform is a future extension if a real use case shows up.
+- Drum/percussion mapping (Pico-8 noise / waveform 6) reuses the same
+  plumbing — users can pick waveform 6 manually for now. A real "drum
+  voice" with pitch→drum-hit mapping is still deferred.
 
-**Library work.**
-- New `src/pico8/metadata.ts` defining the byte format and an encoder.
-- New `bundleToPico8(tracks: TrackInput[], opts) → ConvertResult` in
-  `src/index.ts` where `TrackInput = { name: string, abc: string }`. Each
-  track runs through the existing `abcToPico8` pipeline; results are
-  sequenced into music slots `[0..M-1]`, `[M..M+M'-1]`, … with SFX indices
-  rebased per track. The existing single-track `abcToPico8` is the N=1
-  case without metadata.
-- Promote `rebaseMusicLine` from `scripts/build-sandbox-cart.ts:70-84` into
-  the library (shared between bundle and audition flows).
-- New diagnostic codes: `BUNDLE_OVERFLOW` (>64 music slots or >64 SFX
-  slots in aggregate, or >64 tracks), `NAME_TRUNCATED` (info — name was
-  longer than 16 chars).
+## Slice 7 — Merge into existing cart
 
-**Cart-patch additions.**
-- `extractRomRegions` learns about `__gfx__` and returns
-  `{ sfxBytes, musicBytes, gfxBytes }`. `gfxBytes` is `0x2000` long.
-- `patchCartRom` splices the gfx region at `0x0000`.
+**Goal:** drop the converted music into a user's existing `.p8` file at
+specified offsets, leaving Lua/sprites/map/everything else untouched.
+Replaces the never-shipped jukebox slice — same underlying itch (carry
+the music forward into a real game), much smaller surface.
 
-**Shell cart rewrite.** `web/spike/shell.p8` becomes a small jukebox
-program. `_init` peeks the metadata at `0x0000`, parses into a Lua list.
-`_update60` handles up/down/play/stop. `_draw` renders a list with a
-selection cursor. Re-export to `web/public/runtime/`.
+- New `mergeIntoCart(existingP8: string, result: ConvertResult, opts:
+  { sfxOffset: number, musicOffset: number }): string` in `src/index.ts`.
+  Parses the target `.p8` text into named sections, replaces SFX rows
+  `[sfxOffset .. sfxOffset+N-1]` and music rows
+  `[musicOffset .. musicOffset+M-1]`, preserves all other sections
+  verbatim, re-stitches.
+- Music patterns inside the merged result are rebased to point at the
+  new SFX indices. Promote `rebaseMusicLine` from
+  `scripts/build-sandbox-cart.ts:70-84` into a shared
+  `src/pico8/rebase.ts` so both the audition path and the merge path
+  use one implementation.
+- Empty rows in the target stay empty unless overlapped by the merge
+  range. Sections absent from the target (e.g. no `__music__`) are added
+  with leading empty rows up to the merge offset.
+- CLI: `npm run convert song.abc --merge path/to/target.p8 --sfx-at N
+  --music-at M --out merged.p8`. Without `--merge` the existing single-
+  cart output is unchanged.
+- Playground: a "Merge into cart" panel with a file-picker for the target
+  `.p8`, two number inputs for offsets, "Build & download" button. The
+  in-iframe Pico-8 player keeps previewing the standalone convert (the
+  point is to download the merged cart, not run someone's full game in
+  the playground).
+- New diagnostics:
+  - `MERGE_OFFSET_INVALID` (error) — offset + length > 64, or negative.
+  - `MERGE_OVERWRITES` (warn) — target had non-empty rows in the merge
+    range; lists the overwritten indices.
+  - `MERGE_TARGET_INVALID` (error) — `.p8` couldn't be parsed (missing
+    `pico-8 cartridge` header, malformed section markers).
 
-**Web UI changes.** A "tracks" panel replacing the single textarea: list
-of `{name, abc}` rows, +/× to add/remove, drag-or-buttons to reorder. One
-"Build & Play" button calls `bundleToPico8` and feeds the result through
-the existing player.
-
-**Carried forward.** Slice 5's player module needs no changes — it just
-splices three byte regions instead of two.
+**Resolved decisions**
+- Explicit offsets, not auto-find-free-slots. "Empty" is fuzzy (a row of
+  all-zero SFX bytes is technically a valid silent slot, not unused) and
+  explicit offsets keep behavior predictable. An `--auto` mode can be
+  added later once we know what users actually want.
+- Text-level cart manipulation, not byte-level ROM patching. The slice-5
+  byte splicer is fine for the runtime shell where the source is known
+  fixed bytes; merging into arbitrary user carts means dealing with
+  optional sections, comment lines, and Pico-8 text-format quirks —
+  string parsing is the right granularity.
+- One target-cart format: standard `.p8` text. PNG carts (`.p8.png`) are
+  out of scope; users can export `.p8` from Pico-8 first.
 
 ## Not yet scoped
 
-- Drum/percussion mapping (Pico-8 noise waveform).
+- Drum/percussion mapping (Pico-8 noise waveform 6 as a real drum voice).
+- Per-note instrument changes within a voice.
 - Effects beyond the basics already in IR (`src/ir/types.ts`).
 - ABC ornaments (trills, grace notes) — currently silently dropped.
 - Reverse direction (Pico-8 cart → ABC).
+- PNG cart format (`.p8.png`) input/output.
+- Multi-track jukebox cart (bundle N tunes + Lua picker into one cart).
+  Was drafted as the original slice 6; superseded by slice 7's merge
+  flow, which lets users assemble jukeboxes themselves in their own
+  carts. Spec lives in git history if we want to revive it.

@@ -1,8 +1,12 @@
 #!/usr/bin/env tsx
 import { readFileSync, writeFileSync } from 'node:fs';
-import { abcToPico8, formatDiagnosticText } from '../src/index.js';
+import {
+  abcToPico8,
+  formatDiagnosticText,
+  type VoiceConvertOptions,
+} from '../src/index.js';
 
-const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play] [--arp] [--arp-slow]
+const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play] [--arp] [--arp-slow] [--instrument SPEC]
 
 Reads ABC notation and writes a Pico-8 cart. Use "-" to read from stdin.
 Diagnostics are printed to stderr; --quiet suppresses info-level diagnostics.
@@ -10,6 +14,9 @@ Diagnostics are printed to stderr; --quiet suppresses info-level diagnostics.
 --arp forces Pico-8's arpeggio effect on every chord (default behavior is
        auto: expand if chords fit in 4 channels, else arp). --arp-slow uses
        effect 7 (default 6).
+--instrument SPEC sets per-voice Pico-8 waveforms (0–7). SPEC is a comma-
+       separated list of "voiceIndex:waveform" pairs, 0-based by source
+       ABC voice (V1=0, V2=1, …). Example: --instrument 0:2,1:5
 Exits 1 if any error diagnostics were emitted.`;
 
 interface Args {
@@ -19,6 +26,7 @@ interface Args {
   play: boolean;
   arp: boolean;
   arpSlow: boolean;
+  voices: VoiceConvertOptions[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -28,6 +36,7 @@ function parseArgs(argv: string[]): Args {
   let play = false;
   let arp = false;
   let arpSlow = false;
+  const voices: VoiceConvertOptions[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]!;
@@ -44,6 +53,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === '--arp-slow') {
       arp = true;
       arpSlow = true;
+    } else if (a === '--instrument') {
+      const next = argv[++i];
+      if (next === undefined) fatal(`${a} requires a SPEC argument`);
+      parseInstrumentSpec(next, voices);
     } else if (a === '-h' || a === '--help') {
       process.stdout.write(`${USAGE}\n`);
       process.exit(0);
@@ -57,7 +70,23 @@ function parseArgs(argv: string[]): Args {
   }
 
   if (input === null) fatal(USAGE);
-  return { input: input!, output, quiet, play, arp, arpSlow };
+  return { input: input!, output, quiet, play, arp, arpSlow, voices };
+}
+
+function parseInstrumentSpec(spec: string, voices: VoiceConvertOptions[]): void {
+  for (const pair of spec.split(',')) {
+    const [idxStr, waveStr] = pair.split(':');
+    const idx = Number(idxStr);
+    const wave = Number(waveStr);
+    if (!Number.isInteger(idx) || idx < 0) {
+      fatal(`--instrument: bad voice index "${idxStr}" in "${pair}"`);
+    }
+    if (!Number.isInteger(wave)) {
+      fatal(`--instrument: bad waveform "${waveStr}" in "${pair}"`);
+    }
+    while (voices.length <= idx) voices.push({});
+    voices[idx] = { instrument: wave };
+  }
 }
 
 function injectPlayStub(p8: string): string {
@@ -77,6 +106,7 @@ const abc =
 const result = abcToPico8(abc, {
   chordStrategy: args.arp ? 'arp' : 'auto',
   arpSpeed: args.arpSlow ? 'slow' : 'fast',
+  ...(args.voices.length > 0 ? { voices: args.voices } : {}),
 });
 
 for (const d of result.diagnostics) {

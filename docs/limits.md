@@ -54,6 +54,8 @@ Anything beyond these surfaces as one of the codes below.
 | `INCOMPLETE_REPEAT` | warn | A `\|:` was found with no matching `:\|`; repeat dropped. |
 | `EMPTY_REPEAT` | warn | Repeat region collapses to zero ticks. |
 | `DROPPED_ITEM` | warn | An unrecognized abcjs voice item was dropped. |
+| `INSTRUMENT_OUT_OF_RANGE` | error | A per-voice instrument waveform was outside `[0, 7]` (set via `voices[i].instrument` or `%%pico8 instrument`). |
+| `INSTRUMENT_DIRECTIVE_INVALID` | error | A `%%pico8 instrument` directive was malformed (expected `<voiceNumber> <waveform>`). |
 | `KEY_CHANGE` | info | Mid-tune `K:` change applied. |
 | `METER_CHANGE_IGNORED` | info | Mid-tune meter change ignored; pico-8 has no meter concept. |
 | `TEMPO_CHANGE_IGNORED` | info | Mid-tune tempo change ignored; SFX speed is set once per slot. |
