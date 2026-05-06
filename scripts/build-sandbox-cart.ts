@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { abcToPico8, EMPTY_MUSIC_LINE, EMPTY_SFX_LINE, extractSection } from '../src/index.js';
+import { rebaseMusicLine } from '../src/pico8/rebase.js';
 
 interface Fixture {
   name: string;
@@ -51,22 +52,6 @@ const TOTAL_SLOTS = 64;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
-
-function rebaseMusicLine(line: string, offset: number): string {
-  const space = line.indexOf(' ');
-  if (space < 0) throw new Error(`malformed music line: ${line}`);
-  const flag = line.slice(0, space);
-  const channels = line.slice(space + 1);
-  if (channels.length !== 8) throw new Error(`malformed music line: ${line}`);
-  let rebased = '';
-  for (let c = 0; c < 4; c += 1) {
-    const byte = parseInt(channels.slice(c * 2, c * 2 + 2), 16);
-    // Bit 6 set = silent channel marker (0x40 | channelIndex); leave it alone.
-    const next = (byte & 0x40) ? byte : byte + offset;
-    rebased += next.toString(16).padStart(2, '0');
-  }
-  return `${flag} ${rebased}`;
-}
 
 function buildCart(fixtures: Fixture[]): { manifest: ManifestEntry[]; sfx: string; music: string } {
   const sfxLines: string[] = Array(TOTAL_SLOTS).fill(EMPTY_SFX_LINE);

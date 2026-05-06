@@ -1,5 +1,7 @@
 import {
   abcToPico8,
+  formatDiagnosticParts,
+  mergeIntoCart,
   type Diagnostic,
   type VoiceConvertOptions,
 } from '../../src/index.js';
@@ -19,6 +21,11 @@ const diagnosticsList = document.getElementById('diagnostics') as HTMLUListEleme
 const playerHost = document.getElementById('player-host') as HTMLDivElement;
 const voiceInstrumentsHost = document.getElementById('voice-instruments') as HTMLDivElement;
 const voiceInstrumentsList = document.getElementById('voice-instruments-list') as HTMLDivElement;
+const mergeFileInput = document.getElementById('merge-file') as HTMLInputElement;
+const mergeSfxInput = document.getElementById('merge-sfx-at') as HTMLInputElement;
+const mergeMusicInput = document.getElementById('merge-music-at') as HTMLInputElement;
+const mergeBuildBtn = document.getElementById('merge-build') as HTMLButtonElement;
+const mergeStatus = document.getElementById('merge-status') as HTMLParagraphElement;
 
 for (const ex of EXAMPLES) {
   const opt = document.createElement('option');
@@ -31,11 +38,31 @@ abcInput.value = DEFAULT_EXAMPLE.abc;
 
 const player = new Pico8Player(playerHost);
 let lastP8: string | null = null;
+let lastResult: { p8: string; diagnostics: readonly Diagnostic[] } | null = null;
+let mergeTargetText: string | null = null;
+let mergeTargetName: string | null = null;
 
 function setControlsEnabled(enabled: boolean): void {
   copyBtn.disabled = !enabled;
   downloadBtn.disabled = !enabled;
   stopBtn.disabled = !enabled;
+  updateMergeButton();
+}
+
+function updateMergeButton(): void {
+  mergeBuildBtn.disabled = lastResult === null || mergeTargetText === null;
+}
+
+function setMergeStatus(message: string | null, kind: 'ok' | 'error' | null): void {
+  if (message === null) {
+    mergeStatus.hidden = true;
+    mergeStatus.textContent = '';
+    mergeStatus.className = 'merge-status';
+    return;
+  }
+  mergeStatus.hidden = false;
+  mergeStatus.textContent = message;
+  mergeStatus.className = `merge-status${kind ? ` ${kind}` : ''}`;
 }
 
 // Per-source-voice waveform overrides keyed by 0-based voice index. Survives
@@ -72,11 +99,13 @@ async function convert(): Promise<void> {
   const hasErrors = result.diagnostics.some((d: Diagnostic) => d.severity === 'error');
   if (hasErrors || result.p8 === '') {
     lastP8 = null;
+    lastResult = null;
     setControlsEnabled(false);
     player.stop();
     return;
   }
   lastP8 = result.p8;
+  lastResult = result;
   setControlsEnabled(true);
 
   const voiceCount = countSourceVoices(abcInput.value);
@@ -131,4 +160,63 @@ downloadBtn.addEventListener('click', () => {
   a.download = 'tune.p8';
   a.click();
   URL.revokeObjectURL(url);
+});
+
+mergeFileInput.addEventListener('change', async () => {
+  const file = mergeFileInput.files?.[0];
+  if (!file) {
+    mergeTargetText = null;
+    mergeTargetName = null;
+    setMergeStatus(null, null);
+    updateMergeButton();
+    return;
+  }
+  try {
+    mergeTargetText = await file.text();
+    mergeTargetName = file.name;
+    setMergeStatus(`Loaded ${file.name} (${file.size} bytes).`, 'ok');
+  } catch (err) {
+    mergeTargetText = null;
+    mergeTargetName = null;
+    const msg = err instanceof Error ? err.message : String(err);
+    setMergeStatus(`Failed to read file: ${msg}`, 'error');
+  }
+  updateMergeButton();
+});
+
+mergeBuildBtn.addEventListener('click', () => {
+  if (lastResult === null || mergeTargetText === null) return;
+  const sfxOffset = Number(mergeSfxInput.value);
+  const musicOffset = Number(mergeMusicInput.value);
+  const merged = mergeIntoCart(mergeTargetText, lastResult, { sfxOffset, musicOffset });
+
+  // Re-render diagnostics with merge results appended (don't double-list the
+  // ones that came from the convert step — mergeIntoCart copies those in).
+  renderDiagnostics(diagnosticsList, merged.diagnostics);
+
+  const errors = merged.diagnostics.filter((d) => d.severity === 'error');
+  if (errors.length > 0 || merged.p8 === '') {
+    const first = errors[0];
+    const summary = first
+      ? `${formatDiagnosticParts(first).code}: ${formatDiagnosticParts(first).message}`
+      : 'merge produced no output';
+    setMergeStatus(`Merge failed — ${summary}`, 'error');
+    return;
+  }
+
+  const blob = new Blob([merged.p8], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = mergeTargetName ? `merged-${mergeTargetName}` : 'merged.p8';
+  a.click();
+  URL.revokeObjectURL(url);
+
+  const warnCount = merged.diagnostics.filter((d) => d.severity === 'warn').length;
+  setMergeStatus(
+    warnCount > 0
+      ? `Downloaded merged cart (${warnCount} warning${warnCount === 1 ? '' : 's'} — see diagnostics).`
+      : 'Downloaded merged cart.',
+    'ok',
+  );
 });

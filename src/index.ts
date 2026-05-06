@@ -22,6 +22,8 @@ export {
   SECTION_SFX,
   extractSection,
 } from './pico8/sections.js';
+export { mergeIntoCart } from './pico8/merge.js';
+export type { MergeOptions, MergeResult } from './pico8/merge.js';
 
 export interface VoiceConvertOptions {
   // Pico-8 waveform 0–7. Indexed by source ABC voice (V1 → 0, V2 → 1, …);

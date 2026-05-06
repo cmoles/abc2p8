@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { abcToPico8, extractSection } from '../src/index.js';
+import {
+  abcToPico8,
+  EMPTY_MUSIC_LINE,
+  EMPTY_SFX_LINE,
+  extractSection,
+  mergeIntoCart,
+} from '../src/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string): string =>
@@ -988,5 +994,160 @@ describe('abcToPico8 — slice 6 (per-voice instruments)', () => {
         (d) => d.severity === 'error' && d.code === 'INSTRUMENT_DIRECTIVE_INVALID',
       ),
     ).toBe(true);
+  });
+});
+
+describe('mergeIntoCart — slice 7', () => {
+  const SCALE_ABC = 'X:1\nM:4/4\nL:1/8\nQ:1/4=120\nK:C\nCDEF GABc|\n';
+
+  // Minimal hand-rolled target with non-trivial Lua + a populated SFX slot 0
+  // and music row 0, so we can verify both the splice and the preserve paths.
+  const TARGET = [
+    'pico-8 cartridge // http://www.pico-8.com',
+    'version 41',
+    '__lua__',
+    '-- existing game',
+    'function _update() end',
+    '__gfx__',
+    '01234567',
+    '__sfx__',
+    // sfx 0 — a non-empty line (pretend it's a sound effect from the user's game).
+    `01100000${'1'.repeat(160)}`,
+    '__music__',
+    // music 0 — non-empty (flag=00, channels 00 41 42 43).
+    '00 00414243',
+    '',
+  ].join('\n');
+
+  it('splices new sfx and music into the target at the given offsets', () => {
+    const result = abcToPico8(SCALE_ABC);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const merged = mergeIntoCart(TARGET, result, { sfxOffset: 4, musicOffset: 2 });
+    expect(merged.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(merged.p8, '__sfx__');
+    const music = extractSection(merged.p8, '__music__');
+
+    // Target's slot 0 was preserved at index 0.
+    expect(sfx[0]).toBe(`01100000${'1'.repeat(160)}`);
+    // Padding empties at indices 1..3.
+    for (let i = 1; i < 4; i += 1) expect(sfx[i]).toBe(EMPTY_SFX_LINE);
+    // New SFX at index 4.
+    const newSfx = extractSection(result.p8, '__sfx__');
+    expect(sfx[4]).toBe(newSfx[0]);
+    expect(sfx).toHaveLength(5);
+
+    // Music: target's row 0 preserved, row 1 padded, row 2 = rebased new music.
+    expect(music[0]).toBe('00 00414243');
+    expect(music[1]).toBe(EMPTY_MUSIC_LINE);
+    // New music at index 2 has channel 0 rebased to sfxOffset=4.
+    expect(music[2]).toBe('04 04414243');
+    expect(music).toHaveLength(3);
+  });
+
+  it('preserves unrelated sections verbatim', () => {
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart(TARGET, result, { sfxOffset: 4, musicOffset: 2 });
+    expect(merged.p8).toContain('-- existing game');
+    expect(merged.p8).toContain('function _update() end');
+    expect(merged.p8).toContain('__gfx__\n01234567');
+    expect(merged.p8.startsWith('pico-8 cartridge')).toBe(true);
+    expect(merged.p8.endsWith('\n')).toBe(true);
+  });
+
+  it('warns MERGE_OVERWRITES when the target had non-empty rows in range', () => {
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart(TARGET, result, { sfxOffset: 0, musicOffset: 0 });
+    const overwriteWarns = merged.diagnostics.filter((d) => d.code === 'MERGE_OVERWRITES');
+    // One for sfx (overwrote sfx[0]), one for music (overwrote music[0]).
+    expect(overwriteWarns).toHaveLength(2);
+    expect(overwriteWarns.every((d) => d.severity === 'warn')).toBe(true);
+    expect(overwriteWarns.some((d) => /sfx.*\b0\b/.test(d.message))).toBe(true);
+    expect(overwriteWarns.some((d) => /music.*\b0\b/.test(d.message))).toBe(true);
+  });
+
+  it('does not warn when the merge range only overlaps empty rows', () => {
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart(TARGET, result, { sfxOffset: 4, musicOffset: 2 });
+    expect(merged.diagnostics.filter((d) => d.code === 'MERGE_OVERWRITES')).toEqual([]);
+  });
+
+  it('errors with MERGE_OFFSET_INVALID for negative offsets', () => {
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart(TARGET, result, { sfxOffset: -1, musicOffset: 0 });
+    expect(merged.p8).toBe('');
+    expect(
+      merged.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'MERGE_OFFSET_INVALID',
+      ),
+    ).toBe(true);
+  });
+
+  it('errors with MERGE_OFFSET_INVALID when offset + length > 64', () => {
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart(TARGET, result, { sfxOffset: 64, musicOffset: 0 });
+    expect(merged.p8).toBe('');
+    expect(
+      merged.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'MERGE_OFFSET_INVALID',
+      ),
+    ).toBe(true);
+  });
+
+  it('errors with MERGE_TARGET_INVALID when the target is missing the cart header', () => {
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart('not a real cart', result, {
+      sfxOffset: 0,
+      musicOffset: 0,
+    });
+    expect(merged.p8).toBe('');
+    expect(
+      merged.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'MERGE_TARGET_INVALID',
+      ),
+    ).toBe(true);
+  });
+
+  it('creates missing __music__ section with leading empties up to the offset', () => {
+    const targetNoMusic = [
+      'pico-8 cartridge // http://www.pico-8.com',
+      'version 41',
+      '__lua__',
+      '__sfx__',
+      `01100000${'1'.repeat(160)}`,
+      '',
+    ].join('\n');
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart(targetNoMusic, result, {
+      sfxOffset: 4,
+      musicOffset: 3,
+    });
+    expect(merged.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const music = extractSection(merged.p8, '__music__');
+    // Indices 0..2 are padded empty rows; index 3 is the rebased new music.
+    expect(music).toHaveLength(4);
+    expect(music[3]).toBe('04 04414243');
+  });
+
+  it('rebases music channel ids when sfxOffset > 0', () => {
+    const result = abcToPico8(SCALE_ABC);
+    const merged = mergeIntoCart(TARGET, result, { sfxOffset: 10, musicOffset: 5 });
+    expect(merged.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const music = extractSection(merged.p8, '__music__');
+    // Channel 0's SFX id = 0 + sfxOffset = 10 → hex 0a; silent channels untouched.
+    expect(music[5]).toBe('04 0a414243');
+  });
+
+  it('propagates errors from result without performing the merge', () => {
+    const errored = { p8: '', diagnostics: [{
+      severity: 'error' as const,
+      stage: 'parse' as const,
+      code: 'BAD_ABC',
+      message: 'pretend parser failure',
+    }] };
+    const merged = mergeIntoCart(TARGET, errored, { sfxOffset: 0, musicOffset: 0 });
+    expect(merged.p8).toBe('');
+    expect(merged.diagnostics.some((d) => d.code === 'BAD_ABC')).toBe(true);
   });
 });

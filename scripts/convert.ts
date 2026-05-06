@@ -3,10 +3,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import {
   abcToPico8,
   formatDiagnosticText,
+  mergeIntoCart,
   type VoiceConvertOptions,
 } from '../src/index.js';
 
-const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play] [--arp] [--arp-slow] [--instrument SPEC]
+const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play] [--arp] [--arp-slow] [--instrument SPEC] [--merge target.p8 --sfx-at N --music-at M]
 
 Reads ABC notation and writes a Pico-8 cart. Use "-" to read from stdin.
 Diagnostics are printed to stderr; --quiet suppresses info-level diagnostics.
@@ -17,6 +18,10 @@ Diagnostics are printed to stderr; --quiet suppresses info-level diagnostics.
 --instrument SPEC sets per-voice Pico-8 waveforms (0–7). SPEC is a comma-
        separated list of "voiceIndex:waveform" pairs, 0-based by source
        ABC voice (V1=0, V2=1, …). Example: --instrument 0:2,1:5
+--merge TARGET.p8 splices the converted music into an existing cart, leaving
+       all other sections untouched. Requires --sfx-at N and --music-at M
+       (0-based slot offsets). Music patterns are rebased to point at the
+       new SFX indices.
 Exits 1 if any error diagnostics were emitted.`;
 
 interface Args {
@@ -27,6 +32,9 @@ interface Args {
   arp: boolean;
   arpSlow: boolean;
   voices: VoiceConvertOptions[];
+  mergeTarget: string | null;
+  sfxAt: number | null;
+  musicAt: number | null;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -37,6 +45,9 @@ function parseArgs(argv: string[]): Args {
   let arp = false;
   let arpSlow = false;
   const voices: VoiceConvertOptions[] = [];
+  let mergeTarget: string | null = null;
+  let sfxAt: number | null = null;
+  let musicAt: number | null = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]!;
@@ -57,6 +68,14 @@ function parseArgs(argv: string[]): Args {
       const next = argv[++i];
       if (next === undefined) fatal(`${a} requires a SPEC argument`);
       parseInstrumentSpec(next, voices);
+    } else if (a === '--merge') {
+      const next = argv[++i];
+      if (next === undefined) fatal(`${a} requires a path argument`);
+      mergeTarget = next;
+    } else if (a === '--sfx-at') {
+      sfxAt = parseOffset(a, argv[++i]);
+    } else if (a === '--music-at') {
+      musicAt = parseOffset(a, argv[++i]);
     } else if (a === '-h' || a === '--help') {
       process.stdout.write(`${USAGE}\n`);
       process.exit(0);
@@ -70,7 +89,31 @@ function parseArgs(argv: string[]): Args {
   }
 
   if (input === null) fatal(USAGE);
-  return { input: input!, output, quiet, play, arp, arpSlow, voices };
+  if (mergeTarget !== null && (sfxAt === null || musicAt === null)) {
+    fatal('--merge requires both --sfx-at N and --music-at M');
+  }
+  if (mergeTarget === null && (sfxAt !== null || musicAt !== null)) {
+    fatal('--sfx-at and --music-at only apply with --merge');
+  }
+  return {
+    input: input!,
+    output,
+    quiet,
+    play,
+    arp,
+    arpSlow,
+    voices,
+    mergeTarget,
+    sfxAt,
+    musicAt,
+  };
+}
+
+function parseOffset(flag: string, raw: string | undefined): number {
+  if (raw === undefined) fatal(`${flag} requires an integer argument`);
+  const n = Number(raw);
+  if (!Number.isInteger(n)) fatal(`${flag}: "${raw}" is not an integer`);
+  return n;
 }
 
 function parseInstrumentSpec(spec: string, voices: VoiceConvertOptions[]): void {
@@ -118,7 +161,27 @@ if (result.diagnostics.some((d) => d.severity === 'error')) {
   process.exit(1);
 }
 
-const cart = args.play ? injectPlayStub(result.p8) : result.p8;
+let cart: string;
+if (args.mergeTarget !== null) {
+  const target = readFileSync(args.mergeTarget, 'utf8');
+  const merged = mergeIntoCart(target, result, {
+    sfxOffset: args.sfxAt!,
+    musicOffset: args.musicAt!,
+  });
+  for (const d of merged.diagnostics) {
+    if (args.quiet && d.severity === 'info') continue;
+    // Avoid double-printing diagnostics already shown from `result`.
+    if (result.diagnostics.includes(d)) continue;
+    process.stderr.write(`${formatDiagnosticText(d)}\n`);
+  }
+  if (merged.diagnostics.some((d) => d.severity === 'error')) {
+    process.exit(1);
+  }
+  cart = args.play ? injectPlayStub(merged.p8) : merged.p8;
+} else {
+  cart = args.play ? injectPlayStub(result.p8) : result.p8;
+}
+
 if (args.output) {
   writeFileSync(args.output, cart);
 } else {

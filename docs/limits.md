@@ -90,6 +90,9 @@ Anything beyond these surfaces as one of the codes below.
 |---|---|---|
 | `OUT_OF_RANGE` | error | A note is outside C2–D#7 and ±3 octaves of shifting can't bring it in. |
 | `OUT_OF_RANGE_TRANSPOSED` | info | A note was octave-shifted to fit within Pico-8's pitch range. |
+| `MERGE_OFFSET_INVALID` | error | `mergeIntoCart` was called with a negative offset, or `offset + rows > 64`. |
+| `MERGE_OVERWRITES` | warn | The merge range overlapped non-empty rows in the target cart; lists the indices. |
+| `MERGE_TARGET_INVALID` | error | The target `.p8` was missing the `pico-8 cartridge` header or had duplicate section markers. |
 
 ## Silently handled (no diagnostic, by design)
 

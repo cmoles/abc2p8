@@ -35,6 +35,30 @@
           <span class="voice-instruments-label">Voices:</span>
           <div id="voice-instruments-list" class="voice-instruments-list"></div>
         </div>
+        <div class="merge-panel">
+          <h3 class="merge-title">Merge into existing cart</h3>
+          <p class="merge-hint">
+            Drop the converted music into a target <code>.p8</code> at chosen
+            slot offsets. Other sections (Lua, sprites, map) are preserved.
+            The player above keeps previewing the standalone convert.
+          </p>
+          <div class="merge-controls">
+            <label class="merge-field">
+              Target .p8
+              <input id="merge-file" type="file" accept=".p8,text/plain" />
+            </label>
+            <label class="merge-field merge-num">
+              SFX offset
+              <input id="merge-sfx-at" type="number" min="0" max="63" step="1" value="0" />
+            </label>
+            <label class="merge-field merge-num">
+              Music offset
+              <input id="merge-music-at" type="number" min="0" max="63" step="1" value="0" />
+            </label>
+            <button id="merge-build" type="button" disabled>Build &amp; download</button>
+          </div>
+          <p id="merge-status" class="merge-status" hidden></p>
+        </div>
       </section>
       <section class="output">
         <h2>Diagnostics</h2>

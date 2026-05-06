@@ -136,7 +136,7 @@ the acceptance fixture of the next.
   plumbing — users can pick waveform 6 manually for now. A real "drum
   voice" with pitch→drum-hit mapping is still deferred.
 
-## Slice 7 — Merge into existing cart
+## Slice 7 — Merge into existing cart (shipped)
 
 **Goal:** drop the converted music into a user's existing `.p8` file at
 specified offsets, leaving Lua/sprites/map/everything else untouched.
