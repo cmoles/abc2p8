@@ -33,6 +33,13 @@ export interface QuantizedSlot {
   // `pitch` mirrors arpChord[groupOffset] so downstream layouts stay self-
   // consistent. Emitter stamps these into the SFX and sets effect=arpFast/Slow.
   arpChord?: number[];
+  // Per-slot SFX overrides. Drum voices stamp these from the active kit so
+  // each hit carries its own waveform/volume/effect; the emitter uses them
+  // verbatim and skips the voice-level instrument and same-pitch retrigger
+  // logic.
+  waveform?: number;
+  volume?: number;
+  effect?: number;
 }
 
 const MIN_SLOT_TICKS_FALLBACK = 12; // 16th note at TICKS_PER_QUARTER=48
@@ -301,6 +308,9 @@ function quantizeVoice(
         slot.isOnset = true;
         if (note.staccato) slot.onsetStaccato = true;
       }
+      if (note.instrument !== undefined) slot.waveform = note.instrument;
+      if (note.velocity !== undefined) slot.volume = note.velocity;
+      if (note.pico8Effect !== undefined) slot.effect = note.pico8Effect;
       slots.push(slot);
     }
   }

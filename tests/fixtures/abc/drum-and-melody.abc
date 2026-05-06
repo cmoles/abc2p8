@@ -1,0 +1,12 @@
+X:1
+T:Drum + melody (slice 8)
+M:4/4
+L:1/8
+Q:1/4=120
+%%pico8 drum 2
+%%pico8 instrument 1 5
+K:C
+V:1
+G2 E2 C2 D2|G2 E2 C2 D2|c2 c2 B2 A2|G4 z4|
+V:2
+c e d e c e d e|c e d e c e d e|c e d e c e d e|c e d e c e d e|

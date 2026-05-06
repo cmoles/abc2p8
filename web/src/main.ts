@@ -2,6 +2,7 @@ import {
   abcToPico8,
   formatDiagnosticParts,
   mergeIntoCart,
+  type BuiltInKitName,
   type Diagnostic,
   type VoiceConvertOptions,
 } from '../../src/index.js';
@@ -65,9 +66,11 @@ function setMergeStatus(message: string | null, kind: 'ok' | 'error' | null): vo
   mergeStatus.className = `merge-status${kind ? ` ${kind}` : ''}`;
 }
 
-// Per-source-voice waveform overrides keyed by 0-based voice index. Survives
-// re-renders so a user setting V1=organ then editing the ABC keeps V1=organ.
+// Per-source-voice config keyed by 0-based voice index. Survives re-renders
+// so a user setting V1=organ then editing the ABC keeps V1=organ. Drum-kit
+// selections live in a sibling map; presence implies "this voice is drum."
 const voiceInstruments = new Map<number, number>();
+const voiceDrumKits = new Map<number, BuiltInKitName>();
 
 examplesSelect.addEventListener('change', () => {
   const chosen = EXAMPLES.find((e) => e.id === examplesSelect.value);
@@ -75,16 +78,26 @@ examplesSelect.addEventListener('change', () => {
     abcInput.value = chosen.abc;
     // Different example, different voice layout — start fresh.
     voiceInstruments.clear();
+    voiceDrumKits.clear();
   }
 });
 
 function buildVoicesOpt(): VoiceConvertOptions[] | undefined {
-  if (voiceInstruments.size === 0) return undefined;
-  const max = Math.max(...voiceInstruments.keys());
+  if (voiceInstruments.size === 0 && voiceDrumKits.size === 0) return undefined;
+  const max = Math.max(
+    -1,
+    ...voiceInstruments.keys(),
+    ...voiceDrumKits.keys(),
+  );
   const list: VoiceConvertOptions[] = [];
   for (let i = 0; i <= max; i += 1) {
-    const wave = voiceInstruments.get(i);
-    list.push(wave !== undefined ? { instrument: wave } : {});
+    if (voiceDrumKits.has(i)) {
+      list.push({ drum: true, kit: voiceDrumKits.get(i)! });
+    } else if (voiceInstruments.has(i)) {
+      list.push({ instrument: voiceInstruments.get(i)! });
+    } else {
+      list.push({});
+    }
   }
   return list;
 }
@@ -111,9 +124,14 @@ async function convert(): Promise<void> {
   const voiceCount = countSourceVoices(abcInput.value);
   if (voiceCount > 0) {
     voiceInstrumentsHost.hidden = false;
-    renderVoiceInstruments(voiceInstrumentsList, voiceCount, voiceInstruments, () => {
-      void convert();
-    });
+    renderVoiceInstruments(
+      voiceInstrumentsList,
+      voiceCount,
+      { instruments: voiceInstruments, drumKits: voiceDrumKits },
+      () => {
+        void convert();
+      },
+    );
   } else {
     voiceInstrumentsHost.hidden = true;
   }

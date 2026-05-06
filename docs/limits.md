@@ -56,6 +56,10 @@ Anything beyond these surfaces as one of the codes below.
 | `DROPPED_ITEM` | warn | An unrecognized abcjs voice item was dropped. |
 | `INSTRUMENT_OUT_OF_RANGE` | error | A per-voice instrument waveform was outside `[0, 7]` (set via `voices[i].instrument` or `%%pico8 instrument`). |
 | `INSTRUMENT_DIRECTIVE_INVALID` | error | A `%%pico8 instrument` directive was malformed (expected `<voiceNumber> <waveform>`). |
+| `DRUM_DIRECTIVE_INVALID` | error | A `%%pico8 drum` directive was malformed (expected `<voiceNumber>` with a positive integer). |
+| `DRUM_KIT_INVALID` | error | `voices[i].kit` was an unknown built-in name, or a custom `Kit` was missing entries / had out-of-range fields. |
+| `DRUM_HIT_UNKNOWN` | warn | A drum-voice note carried an accidental (`^c`, `_e`, …); the v1 letter map covers the 7 plain letters only, so the hit dropped to a rest. |
+| `PICO8_DIRECTIVE_UNKNOWN` | error | A `%%pico8 …` line used a sub-keyword other than `instrument` or `drum`. |
 | `KEY_CHANGE` | info | Mid-tune `K:` change applied. |
 | `METER_CHANGE_IGNORED` | info | Mid-tune meter change ignored; pico-8 has no meter concept. |
 | `TEMPO_CHANGE_IGNORED` | info | Mid-tune tempo change ignored; SFX speed is set once per slot. |
@@ -101,6 +105,10 @@ Anything beyond these surfaces as one of the codes below.
   as separate notes. abcjs normalizes most of these already.
 - Trailing silent slots within an SFX block — truncated via `loop_start`
   rather than padded with rests.
+- Drum voices ignore octave (the letter is what picks the drum), the
+  `K:` key signature (no transposition for percussion), the voice-level
+  `instrument` setting (the kit drives per-hit waveform), and
+  `chordStrategy: 'arp'` (drum chords always expand to sibling channels).
 
 ## When to update this file
 

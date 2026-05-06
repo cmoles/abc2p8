@@ -8,6 +8,8 @@ import {
   EMPTY_SFX_LINE,
   extractSection,
   mergeIntoCart,
+  NOISE_KIT,
+  type Kit,
 } from '../src/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -1149,5 +1151,207 @@ describe('mergeIntoCart — slice 7', () => {
     const merged = mergeIntoCart(TARGET, errored, { sfxOffset: 0, musicOffset: 0 });
     expect(merged.p8).toBe('');
     expect(merged.diagnostics.some((d) => d.code === 'BAD_ABC')).toBe(true);
+  });
+});
+
+describe('abcToPico8 — slice 8 (drum voice)', () => {
+  // Encoding helper mirroring the SFX line layout: 8-char header + 32 ×
+  // 5-char slots (pitch hex 2 + waveform 1 + volume 1 + effect 1).
+  const slotHex = (line: string, i: number): string =>
+    line.slice(8 + i * 5, 8 + (i + 1) * 5);
+
+  // Format a kit hit as the Pico-8 slot encoding the emitter writes.
+  const hitHex = (hit: { pitch: number; waveform: number; volume: number; effect: number }): string =>
+    `${hit.pitch.toString(16).padStart(2, '0')}${hit.waveform.toString(16)}${hit.volume.toString(16)}${hit.effect.toString(16)}`;
+
+  it('renders a basic drum line via %%pico8 drum + the noise kit', () => {
+    const result = abcToPico8(fixture('drum-noise-basic.abc'));
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(1);
+    expect(music).toHaveLength(1);
+
+    const line = sfx[0]!;
+    // Header: editor=01, speed=3c (60), loop_start=04 (4 occupied slots), loop_end=00.
+    expect(line.slice(0, 8)).toBe('013c0400');
+
+    expect([0, 1, 2, 3].map((i) => slotHex(line, i))).toEqual([
+      hitHex(NOISE_KIT.kick),
+      hitHex(NOISE_KIT.snare),
+      hitHex(NOISE_KIT.kick),
+      hitHex(NOISE_KIT.snare),
+    ]);
+    // Trailing slots silent.
+    expect(slotHex(line, 4)).toBe('00000');
+    // Channel 0 plays sfx 0; others silent.
+    expect(music[0]).toBe('04 00414243');
+  });
+
+  it('marks a voice as drum via opts.voices[i].drum', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nc d|\n';
+    const result = abcToPico8(abc, { voices: [{ drum: true }] });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect([0, 1].map((i) => slotHex(line, i))).toEqual([
+      hitHex(NOISE_KIT.kick),
+      hitHex(NOISE_KIT.snare),
+    ]);
+  });
+
+  it('holds the same kit shape across slots for sustained drum notes', () => {
+    // Half-note kick: c2 spans two slots; both should carry the kit's
+    // (waveform, volume, effect) verbatim — the kit's fade-out effect IS
+    // the retrigger, so we don't add another retrigger marker.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nc2 d2|\n';
+    const result = abcToPico8(abc, { voices: [{ drum: true }] });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect([0, 1, 2, 3].map((i) => slotHex(line, i))).toEqual([
+      hitHex(NOISE_KIT.kick),
+      hitHex(NOISE_KIT.kick),
+      hitHex(NOISE_KIT.snare),
+      hitHex(NOISE_KIT.snare),
+    ]);
+  });
+
+  it('expands a drum chord [ce] into two sibling channels', () => {
+    // Simultaneous kick + hat-closed.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\n[ce] [ce]|\n';
+    const result = abcToPico8(abc, { voices: [{ drum: true }] });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    const music = extractSection(result.p8, '__music__');
+    expect(sfx).toHaveLength(2);
+    expect(music).toHaveLength(1);
+
+    // Sibling 0 carries the lower kit pitch (kick=8); sibling 1 the higher
+    // (hat-closed=50).
+    expect(slotHex(sfx[0]!, 0)).toBe(hitHex(NOISE_KIT.kick));
+    expect(slotHex(sfx[1]!, 0)).toBe(hitHex(NOISE_KIT['hat-closed']));
+    expect(music[0]).toBe('04 00014243');
+  });
+
+  it('drum voices ignore chordStrategy: "arp" and still expand', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\n[ce]4|\n';
+    const result = abcToPico8(abc, {
+      chordStrategy: 'arp',
+      voices: [{ drum: true }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    // Two SFX (one per drum) — not a single arp SFX.
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(2);
+    // Neither line stamps the arp effect (6 or 7) — they all carry the
+    // kit's effect instead.
+    for (const line of sfx) {
+      const eff = parseInt(slotHex(line, 0).slice(4, 5), 16);
+      expect([6, 7]).not.toContain(eff);
+    }
+  });
+
+  it('drum + melodic voices coexist on different channels', () => {
+    const abc =
+      'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n' +
+      'V:1\nCDEF|\n' +
+      'V:2\nc d c d|\n';
+    const result = abcToPico8(abc, {
+      voices: [{}, { drum: true }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const sfx = extractSection(result.p8, '__sfx__');
+    expect(sfx).toHaveLength(2);
+    // V1 plays a melodic C (pitch 24, default waveform 0, vol 5, effect 0).
+    expect(slotHex(sfx[0]!, 0)).toBe('18050');
+    // V2 plays a kick from the noise kit.
+    expect(slotHex(sfx[1]!, 0)).toBe(hitHex(NOISE_KIT.kick));
+  });
+
+  it('warns DRUM_HIT_UNKNOWN when a drum-voice note carries an accidental', () => {
+    // The v1 letter map covers C–B with no accidental variants; a sharp
+    // (^c, ^d, …) is the future-proofing slot for clap/rim-shot/etc. Until
+    // those names land, accidentals drop to a rest with a warning.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\n^c d|\n';
+    const result = abcToPico8(abc, { voices: [{ drum: true }] });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'warn' && d.code === 'DRUM_HIT_UNKNOWN',
+      ),
+    ).toBe(true);
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    // Slot 0 dropped to a rest (silent); slot 1 plays the snare.
+    expect(slotHex(line, 0)).toBe('00000');
+    expect(slotHex(line, 1)).toBe(hitHex(NOISE_KIT.snare));
+  });
+
+  it('errors with DRUM_KIT_INVALID when kit name is unknown', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nc d|\n';
+    const result = abcToPico8(abc, {
+      voices: [{ drum: true, kit: 'fake-kit' as never }],
+    });
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'DRUM_KIT_INVALID',
+      ),
+    ).toBe(true);
+  });
+
+  it('errors with DRUM_KIT_INVALID when a custom kit is malformed', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nc|\n';
+    const broken = { ...NOISE_KIT, kick: { ...NOISE_KIT.kick, pitch: 99 } } as Kit;
+    const result = abcToPico8(abc, {
+      voices: [{ drum: true, kit: broken }],
+    });
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'DRUM_KIT_INVALID',
+      ),
+    ).toBe(true);
+  });
+
+  it('honors a custom kit (waveform/pitch/volume/effect carry through to the SFX)', () => {
+    const customKit: Kit = {
+      ...NOISE_KIT,
+      kick: { waveform: 3, pitch: 5, volume: 7, effect: 4 },
+    };
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nc|\n';
+    const result = abcToPico8(abc, {
+      voices: [{ drum: true, kit: customKit }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect(slotHex(line, 0)).toBe(hitHex(customKit.kick));
+  });
+
+  it('opts.voices[i].instrument is ignored on drum voices (kit drives waveform)', () => {
+    // Marking a drum voice and also setting instrument: 2 should not stamp
+    // waveform 2; the kit's waveform (6 for noise) wins per slot.
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nc|\n';
+    const result = abcToPico8(abc, {
+      voices: [{ drum: true, instrument: 2 }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    // Kick from noise kit → waveform 6.
+    expect(slotHex(line, 0).slice(2, 3)).toBe('6');
+  });
+
+  it('errors with DRUM_DIRECTIVE_INVALID when %%pico8 drum is malformed', () => {
+    const abc = 'X:1\nM:4/4\nL:1/4\nQ:1/4=120\n%%pico8 drum oops\nK:C\nV:1\nc|\n';
+    const result = abcToPico8(abc);
+    expect(result.p8).toBe('');
+    expect(
+      result.diagnostics.some(
+        (d) => d.severity === 'error' && d.code === 'DRUM_DIRECTIVE_INVALID',
+      ),
+    ).toBe(true);
   });
 });

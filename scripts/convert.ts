@@ -4,10 +4,11 @@ import {
   abcToPico8,
   formatDiagnosticText,
   mergeIntoCart,
+  type BuiltInKitName,
   type VoiceConvertOptions,
 } from '../src/index.js';
 
-const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play] [--arp] [--arp-slow] [--instrument SPEC] [--merge target.p8 --sfx-at N --music-at M]
+const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play] [--arp] [--arp-slow] [--instrument SPEC] [--drum-voice N]... [--kit NAME] [--merge target.p8 --sfx-at N --music-at M]
 
 Reads ABC notation and writes a Pico-8 cart. Use "-" to read from stdin.
 Diagnostics are printed to stderr; --quiet suppresses info-level diagnostics.
@@ -18,11 +19,17 @@ Diagnostics are printed to stderr; --quiet suppresses info-level diagnostics.
 --instrument SPEC sets per-voice Pico-8 waveforms (0–7). SPEC is a comma-
        separated list of "voiceIndex:waveform" pairs, 0-based by source
        ABC voice (V1=0, V2=1, …). Example: --instrument 0:2,1:5
+--drum-voice N marks source voice index N (0-based) as a drum voice. Plain
+       note letters then trigger named drum hits (c=kick, d=snare, e=hat-
+       closed, f=hat-open, g=tom-low, a=tom-mid, b=tom-high). Repeatable.
+--kit NAME picks a built-in kit for every drum voice. Built-in kits: noise.
 --merge TARGET.p8 splices the converted music into an existing cart, leaving
        all other sections untouched. Requires --sfx-at N and --music-at M
        (0-based slot offsets). Music patterns are rebased to point at the
        new SFX indices.
 Exits 1 if any error diagnostics were emitted.`;
+
+const BUILT_IN_KIT_NAMES: readonly BuiltInKitName[] = ['noise'];
 
 interface Args {
   input: string;
@@ -32,6 +39,8 @@ interface Args {
   arp: boolean;
   arpSlow: boolean;
   voices: VoiceConvertOptions[];
+  drumVoiceIndices: number[];
+  kit: BuiltInKitName | null;
   mergeTarget: string | null;
   sfxAt: number | null;
   musicAt: number | null;
@@ -45,6 +54,8 @@ function parseArgs(argv: string[]): Args {
   let arp = false;
   let arpSlow = false;
   const voices: VoiceConvertOptions[] = [];
+  const drumVoiceIndices: number[] = [];
+  let kit: BuiltInKitName | null = null;
   let mergeTarget: string | null = null;
   let sfxAt: number | null = null;
   let musicAt: number | null = null;
@@ -68,6 +79,21 @@ function parseArgs(argv: string[]): Args {
       const next = argv[++i];
       if (next === undefined) fatal(`${a} requires a SPEC argument`);
       parseInstrumentSpec(next, voices);
+    } else if (a === '--drum-voice') {
+      const next = argv[++i];
+      if (next === undefined) fatal(`${a} requires an integer argument`);
+      const idx = Number(next);
+      if (!Number.isInteger(idx) || idx < 0) {
+        fatal(`${a}: "${next}" is not a non-negative integer`);
+      }
+      drumVoiceIndices.push(idx);
+    } else if (a === '--kit') {
+      const next = argv[++i];
+      if (next === undefined) fatal(`${a} requires a NAME argument`);
+      if (!(BUILT_IN_KIT_NAMES as readonly string[]).includes(next)) {
+        fatal(`${a}: unknown kit "${next}". Built-in kits: ${BUILT_IN_KIT_NAMES.join(', ')}`);
+      }
+      kit = next as BuiltInKitName;
     } else if (a === '--merge') {
       const next = argv[++i];
       if (next === undefined) fatal(`${a} requires a path argument`);
@@ -95,6 +121,14 @@ function parseArgs(argv: string[]): Args {
   if (mergeTarget === null && (sfxAt !== null || musicAt !== null)) {
     fatal('--sfx-at and --music-at only apply with --merge');
   }
+  // Apply drum-voice + kit choices into the voices opt array, growing it
+  // to the highest referenced index and merging with any --instrument
+  // entries the user already set.
+  for (const idx of drumVoiceIndices) {
+    while (voices.length <= idx) voices.push({});
+    voices[idx] = { ...voices[idx], drum: true, ...(kit ? { kit } : {}) };
+  }
+
   return {
     input: input!,
     output,
@@ -103,6 +137,8 @@ function parseArgs(argv: string[]): Args {
     arp,
     arpSlow,
     voices,
+    drumVoiceIndices,
+    kit,
     mergeTarget,
     sfxAt,
     musicAt,

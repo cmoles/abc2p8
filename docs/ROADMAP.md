@@ -185,14 +185,109 @@ the music forward into a real game), much smaller surface.
 - One target-cart format: standard `.p8` text. PNG carts (`.p8.png`) are
   out of scope; users can export `.p8` from Pico-8 first.
 
+## Slice 8 — Drum voice with kit framework (shipped)
+
+Adds a drum/percussion primitive so LLMs (and humans) can write rhythm
+tracks naturally without hand-picking noise pitches and hoping they
+sound drum-like. Closes the biggest perceptual gap for "finished-
+sounding" tunes — chiptunes need drums to land.
+
+- A voice can be marked as a *drum voice*, which intentionally lifts
+  slice 6's per-voice instrument rule: each note carries its own
+  (waveform, pitch, volume, effect) tuple from the active kit instead
+  of a uniform waveform. The IR gains a discriminator on `Voice`
+  (`kind: 'melodic' | 'drum'`).
+- Marked via ABC directive `%%pico8 drum <voiceNumber>` (1-based,
+  matches slice 6's `%%pico8 instrument` style) or via API as
+  `voices: [{ drum: true, kit: 'noise' }]`.
+- ABC notation: in a drum voice, plain note letters trigger named drum
+  hits via a fixed letter→drum-name map (octave ignored in v1):
+  - `c` → kick
+  - `d` → snare
+  - `e` → hat-closed
+  - `f` → hat-open
+  - `g` → tom-low
+  - `a` → tom-mid
+  - `b` → tom-high
+
+  Note durations apply normally (a half-note kick holds the kick hit's
+  SFX shape for that duration). Rests work as in melodic voices.
+  Accidentals outside the map emit `DRUM_HIT_UNKNOWN` (warn) and drop
+  to a rest.
+- Kits are data: `Kit = Record<DrumName, { waveform: 0..7, pitch: 0..63,
+  volume: 0..7, effect: 0..7 }>`. Users pass custom kits via API
+  (`{ drum: true, kit: customKitObject }`) or by built-in name
+  (`kit: 'noise'`). Built-ins are exported from `src/pico8/kits.ts` so
+  callers can spread+override.
+- Default built-in kit `'noise'`: all hits use waveform 6 (noise) at
+  calibrated pitches with fade-out effects. Simplest to validate;
+  NES-classic tone. Named-preset kits (`'hybrid'`, `'tonal'`, etc.)
+  deferred — ship the framework and one default, add presets once real
+  LLM output tells us which sounds carry.
+- Quantize/emit: drum voice flows through the existing pipeline. Each
+  hit stamps its kit tuple onto the corresponding SFX slots; sustained
+  notes hold the same hit shape across slots.
+- Channel budget: a drum voice counts as one channel like any other.
+  Drum chords (`[ce]` = simultaneous kick + hat) expand into sibling
+  voices the same way melodic chords do, and consume channels
+  accordingly. The existing `CHORD_OVERFLOW` rule applies.
+- New diagnostics:
+  - `DRUM_HIT_UNKNOWN` (warn) — note carries an accidental that's not in
+    the v1 drum vocabulary (`^c`, `_e`, …); dropped to a rest. The 7
+    plain letters always map.
+  - `DRUM_KIT_INVALID` (error) — built-in kit name unknown, or custom
+    kit missing required hits / has out-of-range field values.
+  - `DRUM_DIRECTIVE_INVALID` (error) — `%%pico8 drum` line malformed
+    (wrong arg count, non-positive voice number).
+- CLI: `--drum-voice <i>` (0-based, repeatable for multiple drum
+  voices) marks a voice as drum; `--kit <name>` picks a built-in (only
+  `'noise'` for v1). Custom kits stay API-only.
+- Playground: drum-voice toggle next to each voice's instrument
+  dropdown; when toggled on, the dropdown swaps to a kit picker.
+
+**Resolved decisions**
+- The letter→drum map is fixed, not kit-controlled. Kits define the
+  *sound* of each drum, not which letter triggers it. Keeps ABC
+  portable across kits — swap kits to change tone without rewriting
+  notes.
+- Drum chords expand into sibling voices like melodic chords, rather
+  than folding into a single SFX slot. Pico-8 plays one hit per
+  channel-slot, so simultaneous drum hits genuinely need separate
+  channels. Auto-arp doesn't apply (arpeggiating a kick+hat is
+  musically wrong).
+- Octave is ignored on drum-voice notes in v1. Extending the vocabulary
+  via accidentals (`^c` = clap, `^d` = rim, etc.) is an easy follow-up
+  once the basic 7 are validated.
+- Built-in preset kits beyond `'noise'` deferred. Avoids opinionating
+  on tone before we've validated the framework against real tunes,
+  and avoids the "this 808 doesn't sound like an 808" trap of naming
+  presets after real machines.
+- Drum voices default to the `'noise'` kit when `kit:` is unset.
+  `voices[i].instrument` (and the `%%pico8 instrument` directive) is
+  silently ignored on drum voices — the kit drives per-hit waveform —
+  so callers can spread shared per-voice config without bookkeeping.
+
 ## Not yet scoped
 
-- Drum/percussion mapping (Pico-8 noise waveform 6 as a real drum voice).
-- Per-note instrument changes within a voice.
+- Inspector / lint tooling for LLM authoring — programmatic surface
+  (CLI + library export) returning structural facts (per-voice pitch
+  range, slot grid, chord onsets, voice-activity timeline) plus
+  algorithmic warnings (silent voice, register clash, no rests,
+  monotonic rhythm, pitch clamped at range edges). Optional ASCII
+  piano-roll output. Substitute "ear" for LLMs that can't hear the
+  output. **Lead slice 9 candidate** — most useful once drums land,
+  since a 4-piece arrangement gives the lint more interesting things
+  to say than a melody-and-pad.
+- Per-note instrument changes within a voice (melodic voices). Drum
+  voices already do this by design in slice 8.
 - Effects beyond the basics already in IR (`src/ir/types.ts`).
 - ABC ornaments (trills, grace notes) — currently silently dropped.
 - Reverse direction (Pico-8 cart → ABC).
 - PNG cart format (`.p8.png`) input/output.
+- Named drum-kit presets beyond `'noise'` (`'hybrid'`, `'tonal'`, etc.).
+  Deferred from slice 8.
+- LLM authoring guide (`AGENTS.md` + `examples/llm/` recipe library).
+  Scope was drafted but punted in favor of building out tooling first.
 - Multi-track jukebox cart (bundle N tunes + Lua picker into one cart).
   Was drafted as the original slice 6; superseded by slice 7's merge
   flow, which lets users assemble jukeboxes themselves in their own

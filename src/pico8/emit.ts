@@ -88,6 +88,16 @@ function emitSfxLine(
     if (pitch === null && slot.pitch !== null) return null;
     if (pitch === null) {
       notes.push({ pitch: 0, waveform: 0, volume: 0, effect: 0 });
+    } else if (slot.waveform !== undefined || slot.volume !== undefined || slot.effect !== undefined) {
+      // Per-slot SFX overrides (drum-voice hits). Each onset stamps its own
+      // kit tuple; sustained slots within a hit repeat the same shape, which
+      // is exactly what we want for "hold the kit hit across slots."
+      notes.push({
+        pitch,
+        waveform: slot.waveform ?? waveform,
+        volume: slot.volume ?? opts.defaultVolume,
+        effect: slot.effect ?? DEFAULT_EFFECT,
+      });
     } else {
       let effect: number;
       if (slot.arpChord) {

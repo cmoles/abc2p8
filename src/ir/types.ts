@@ -15,6 +15,10 @@ export interface Note {
   velocity?: number;
   instrument?: number;
   effect?: Effect;
+  // Drum-voice notes carry a raw Pico-8 effect (0–7) from the kit, which
+  // bypasses the abstract `effect` field above. Stamped onto every slot of
+  // the note in the emitter.
+  pico8Effect?: number;
   tiedToNext?: boolean;
   staccato?: boolean;
   // Chord pitches above `pitch`, sorted ascending (MIDI). Set only when the
@@ -23,10 +27,13 @@ export interface Note {
   extraPitches?: number[];
 }
 
+export type VoiceKind = 'melodic' | 'drum';
+
 export interface Voice {
   id: string;
   notes: Note[];
   instrument?: number;
+  kind?: VoiceKind;
 }
 
 export interface ScoreMeta {

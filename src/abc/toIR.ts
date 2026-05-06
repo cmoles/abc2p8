@@ -6,7 +6,9 @@ import type {
   VoiceItemNote,
 } from 'abcjs';
 import type { Diagnostics } from '../ir/diagnostics.js';
-import type { Note, RepeatRegion, Score, Voice } from '../ir/types.js';
+import { PICO8_MIDI_OFFSET } from '../pico8/constraints.js';
+import type { DrumName, Kit } from '../pico8/kits.js';
+import type { Note, RepeatRegion, Score, Voice, VoiceKind } from '../ir/types.js';
 
 export const TICKS_PER_QUARTER = 48;
 
@@ -97,9 +99,28 @@ export const MAX_ARP_CHORD = 4;
 export type ChordStrategy = 'auto' | 'expand' | 'arp';
 type ResolvedChordStrategy = 'expand' | 'arp';
 
+export interface VoiceDrumConfig {
+  // Resolved kit data — built-in kit name lookup happens in the caller so
+  // the IR layer doesn't need to know about kit registries.
+  kit: Kit;
+}
+
 export interface ToIROptions {
   chordStrategy?: ChordStrategy;
+  // 0-based voice index → drum config. Voices not in the map are melodic.
+  drumVoices?: Map<number, VoiceDrumConfig>;
 }
+
+// Plain ABC letter → fixed drum name. Octave is ignored in v1.
+const DRUM_LETTER_MAP: Readonly<Record<string, DrumName>> = {
+  C: 'kick',
+  D: 'snare',
+  E: 'hat-closed',
+  F: 'hat-open',
+  G: 'tom-low',
+  A: 'tom-mid',
+  B: 'tom-high',
+};
 
 function resolveAutoStrategy(
   allVoices: VoiceItem[][],
@@ -158,11 +179,16 @@ export function abcToScore(
       ? resolveAutoStrategy(allVoices, diagnostics)
       : requestedStrategy;
 
+  const drumVoices = opts.drumVoices ?? new Map<number, VoiceDrumConfig>();
   const converted: VoiceConvertResult[] = [];
   for (let i = 0; i < allVoices.length; i += 1) {
     const id = `V${i + 1}`;
+    const drum = drumVoices.get(i);
+    // Drum voices ignore the chord strategy: arpeggiating a kick+hat is
+    // musically wrong, so simultaneous drum hits always expand to siblings.
+    const voiceStrategy: ResolvedChordStrategy = drum ? 'expand' : chordStrategy;
     converted.push(
-      convertVoiceItems(allVoices[i]!, firstStaff.key, id, diagnostics, chordStrategy),
+      convertVoiceItems(allVoices[i]!, firstStaff.key, id, diagnostics, voiceStrategy, drum),
     );
   }
 
@@ -206,12 +232,13 @@ export function abcToScore(
   for (let i = 0; i < converted.length; i += 1) {
     const c = converted[i]!;
     const sourceId = `V${i + 1}`;
+    const kind: VoiceKind = drumVoices.has(i) ? 'drum' : 'melodic';
     if (c.siblings.length === 1) {
-      voices.push({ id: sourceId, notes: c.siblings[0]! });
+      voices.push({ id: sourceId, notes: c.siblings[0]!, kind });
     } else {
       for (let s = 0; s < c.siblings.length; s += 1) {
         const suffix = String.fromCharCode(0x41 + s);
-        voices.push({ id: `${sourceId}.${suffix}`, notes: c.siblings[s]! });
+        voices.push({ id: `${sourceId}.${suffix}`, notes: c.siblings[s]!, kind });
       }
     }
   }
@@ -250,10 +277,13 @@ function convertVoiceItems(
   voiceId: string,
   diagnostics: Diagnostics,
   chordStrategy: ResolvedChordStrategy,
+  drum: VoiceDrumConfig | undefined,
 ): VoiceConvertResult {
   const ctx: ConvertContext = {
     diagnostics,
-    keyMap: keySignatureMap(key),
+    // Drum voices ignore key signatures: notes look up drum names by letter,
+    // not pitch, so accidentals from K: would be misleading.
+    keyMap: drum ? new Map<string, number>() : keySignatureMap(key),
     measureAccidentals: new Map(),
   };
 
@@ -319,9 +349,15 @@ function convertVoiceItems(
     durationTicks: number,
     staccato: boolean,
     startsTie: boolean,
+    drumHit?: Kit[DrumName],
   ): void => {
     const note: Note = { startTick: cursor, durationTick: durationTicks, pitch: midi };
     if (staccato) note.staccato = true;
+    if (drumHit) {
+      note.instrument = drumHit.waveform;
+      note.velocity = drumHit.volume;
+      note.pico8Effect = drumHit.effect;
+    }
 
     const pendingTie = pendingTies[siblingIdx];
     let target: Note;
@@ -416,11 +452,58 @@ function convertVoiceItems(
       continue;
     }
 
+    const itemTie = noteItemHasTie(item);
+    const staccato = hasStaccato(item);
+
+    if (drum) {
+      const hits: { hit: Kit[DrumName]; startTie: boolean }[] = [];
+      for (const p of rawPitches) {
+        const letter = letterFromDiatonic(p.pitch);
+        // Accidentals are outside the v1 drum vocabulary: they would only
+        // make sense once the letter map grows (e.g. ^c → clap). Warn and
+        // drop the hit so the pitch column doesn't silently misfire.
+        const accidental = p.accidental;
+        const explicitAccidental =
+          accidental !== undefined && accidental !== 'natural';
+        const drumName = explicitAccidental ? undefined : DRUM_LETTER_MAP[letter];
+        if (!drumName) {
+          const desc = explicitAccidental
+            ? `accidental "${accidental}" on letter "${letter}"`
+            : `letter "${letter}"`;
+          diagnostics.warn(
+            'toIR',
+            'DRUM_HIT_UNKNOWN',
+            `Drum hit ${desc} has no mapping in this kit; dropped to a rest.`,
+            { voice: voiceId, tick: cursor },
+          );
+          continue;
+        }
+        hits.push({ hit: drum.kit[drumName], startTie: !!p.startTie });
+      }
+      if (hits.length === 0) {
+        for (let i = 0; i < siblings.length; i += 1) pushRest(i, durationTicks);
+        cursor += durationTicks;
+        continue;
+      }
+      hits.sort((a, b) => a.hit.pitch - b.hit.pitch);
+      ensureSiblingCount(hits.length);
+      for (let i = 0; i < siblings.length; i += 1) {
+        if (i < hits.length) {
+          const e = hits[i]!;
+          const startsTie = itemTie || e.startTie;
+          const midi = e.hit.pitch + PICO8_MIDI_OFFSET;
+          pushPitch(i, midi, durationTicks, staccato, startsTie, e.hit);
+        } else {
+          pushRest(i, durationTicks);
+        }
+      }
+      cursor += durationTicks;
+      continue;
+    }
+
     const indexed = rawPitches.map((p) => ({ p, midi: pitchToMidi(p, ctx) }));
     indexed.sort((a, b) => a.midi - b.midi);
 
-    const itemTie = noteItemHasTie(item);
-    const staccato = hasStaccato(item);
     const startsTieAny = itemTie || indexed.some((e) => !!e.p.startTie);
 
     if (chordStrategy === 'arp' && indexed.length > 1) {

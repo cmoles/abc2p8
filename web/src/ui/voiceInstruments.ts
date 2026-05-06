@@ -1,3 +1,5 @@
+import type { BuiltInKitName } from '../../../src/index.js';
+
 // Pico-8's 8 built-in waveforms. Names from the Pico-8 manual / common usage.
 const WAVEFORM_LABELS: readonly string[] = [
   '0 — Triangle',
@@ -10,10 +12,19 @@ const WAVEFORM_LABELS: readonly string[] = [
   '7 — Phaser',
 ];
 
+const KIT_LABELS: readonly { id: BuiltInKitName; label: string }[] = [
+  { id: 'noise', label: 'Noise (NES-classic)' },
+];
+
+export interface VoiceConfigSelections {
+  instruments: Map<number, number>;
+  drumKits: Map<number, BuiltInKitName>;
+}
+
 export function renderVoiceInstruments(
   host: HTMLElement,
   voiceCount: number,
-  selections: Map<number, number>,
+  selections: VoiceConfigSelections,
   onChange: () => void,
 ): void {
   host.replaceChildren();
@@ -24,34 +35,73 @@ export function renderVoiceInstruments(
 
 function renderRow(
   voiceIdx: number,
-  selections: Map<number, number>,
+  selections: VoiceConfigSelections,
   onChange: () => void,
-): HTMLLabelElement {
-  const label = document.createElement('label');
-  label.className = 'voice-instrument';
+): HTMLDivElement {
+  const row = document.createElement('div');
+  row.className = 'voice-instrument';
 
   const tag = document.createElement('span');
   tag.className = 'voice-instrument-tag';
   tag.textContent = `V${voiceIdx + 1}`;
-  label.appendChild(tag);
+  row.appendChild(tag);
+
+  const drumToggle = document.createElement('label');
+  drumToggle.className = 'voice-drum-toggle';
+  const drumCheckbox = document.createElement('input');
+  drumCheckbox.type = 'checkbox';
+  drumCheckbox.checked = selections.drumKits.has(voiceIdx);
+  drumToggle.appendChild(drumCheckbox);
+  drumToggle.appendChild(document.createTextNode(' Drum'));
+  row.appendChild(drumToggle);
 
   const select = document.createElement('select');
-  for (let w = 0; w < WAVEFORM_LABELS.length; w += 1) {
-    const opt = document.createElement('option');
-    opt.value = String(w);
-    opt.textContent = WAVEFORM_LABELS[w]!;
-    select.appendChild(opt);
-  }
-  const current = selections.get(voiceIdx) ?? 0;
-  select.value = String(current);
+  row.appendChild(select);
 
-  select.addEventListener('change', () => {
-    const wave = Number(select.value);
-    if (wave === 0 && !selections.has(voiceIdx)) return; // No-op: already default.
-    selections.set(voiceIdx, wave);
+  const populate = (): void => {
+    select.replaceChildren();
+    if (selections.drumKits.has(voiceIdx)) {
+      for (const k of KIT_LABELS) {
+        const opt = document.createElement('option');
+        opt.value = k.id;
+        opt.textContent = k.label;
+        select.appendChild(opt);
+      }
+      select.value = selections.drumKits.get(voiceIdx) ?? KIT_LABELS[0]!.id;
+    } else {
+      for (let w = 0; w < WAVEFORM_LABELS.length; w += 1) {
+        const opt = document.createElement('option');
+        opt.value = String(w);
+        opt.textContent = WAVEFORM_LABELS[w]!;
+        select.appendChild(opt);
+      }
+      const current = selections.instruments.get(voiceIdx) ?? 0;
+      select.value = String(current);
+    }
+  };
+  populate();
+
+  drumCheckbox.addEventListener('change', () => {
+    if (drumCheckbox.checked) {
+      // Default to noise kit; drop any prior melodic instrument override.
+      selections.drumKits.set(voiceIdx, 'noise');
+    } else {
+      selections.drumKits.delete(voiceIdx);
+    }
+    populate();
     onChange();
   });
 
-  label.appendChild(select);
-  return label;
+  select.addEventListener('change', () => {
+    if (selections.drumKits.has(voiceIdx)) {
+      selections.drumKits.set(voiceIdx, select.value as BuiltInKitName);
+    } else {
+      const wave = Number(select.value);
+      if (wave === 0 && !selections.instruments.has(voiceIdx)) return;
+      selections.instruments.set(voiceIdx, wave);
+    }
+    onChange();
+  });
+
+  return row;
 }

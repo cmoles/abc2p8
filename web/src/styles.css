@@ -186,6 +186,14 @@ textarea {
   font-size: 0.8rem;
 }
 
+.voice-drum-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 button {
   background: var(--accent);
   color: #1a1a1a;
