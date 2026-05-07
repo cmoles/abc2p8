@@ -1,0 +1,20 @@
+X:1
+T:March of the 1-bit Heroes
+M:4/4
+L:1/8
+Q:1/4=128
+%%pico8 instrument 1 2
+%%pico8 instrument 2 0
+%%pico8 drum 3
+K:C
+V:1
+G2 G2 c2 e2|d2 c2 G4|F2 F2 A2 c2|B2 A2 G4|
+G2 G2 c2 e2|d2 c2 G4|F2 F2 A2 c2|c8|
+V:2
+C,4 G,,4|F,4 G,,4|
+C,4 G,,4|F,4 C,,4|
+C,4 G,,4|F,4 G,,4|
+C,4 G,,4|C,8|
+V:3
+c4 d2 e2|c4 d2 e2|c4 d2 e2|c4 d2 e2|
+c4 d2 e2|c4 d2 e2|c4 d2 e2|c8|

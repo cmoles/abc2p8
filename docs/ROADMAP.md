@@ -290,27 +290,21 @@ punted preset design pending real use.
   notes re-articulating consistently across all built-in kits;
   hat-open's effect=0 (sustain) is the one intentional exception.
 
-## Slice 10 — LLM authoring guide (next)
-
-**Goal:** make it possible for an LLM to write idiomatic ABC for this
-pipeline without trial-and-error. Doubles as failure-mode discovery for
-slice 11 (inspector) — writing the guide forces us to catalogue what
-goes wrong, which becomes the inspector's target list.
+## Slice 10 — LLM authoring guide (shipped)
 
 - `AGENTS.md` at repo root: pipeline-aware authoring guide (channel
   budget, chord arity, slot grid, drum vocabulary, instrument
   selection, repeat semantics, common diagnostics and how to avoid
-  them). Style: machine-readable, like CLAUDE.md but written for any
-  LLM consuming the repo.
-- `examples/llm/` recipe library: one ABC + expected-cart pair per
-  use case (melody only, melody + pad, melody + bass + drums, drum
-  pattern, multi-section tune with repeats, chord comping with
-  auto-arp). Each recipe has a short README explaining what it
-  demonstrates and the diagnostics it should *not* produce.
-- No library code changes expected. Any pipeline gaps surfaced by the
-  recipes (e.g. an ornament that should round-trip but doesn't) get
-  written up as candidate follow-on slices, not patched inline.
-- Output: a catalogued list of LLM failure modes, which feeds slice 11.
+  them).
+- `examples/llm/` recipe library: six ABC + expected-cart pairs
+  (melody only, melody + pad, melody + bass + drums, drum pattern,
+  multi-section with repeats, chord comping with auto-arp). Each
+  recipe has a README explaining what it demonstrates and the
+  diagnostics it should *not* produce.
+- No library code changes — the slice was pure documentation +
+  fixtures, surfacing gaps without patching them inline.
+- Catalogue of LLM failure modes lives at
+  [docs/llm-failure-modes.md](llm-failure-modes.md) and feeds slice 11.
 
 ## Slice 11 — Inspector / lint tooling
 

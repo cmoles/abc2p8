@@ -1,0 +1,14 @@
+X:1
+T:Drifting Pad
+M:4/4
+L:1/8
+Q:1/4=96
+%%pico8 instrument 1 1
+%%pico8 instrument 2 0
+K:Am
+V:1
+e2 g2 a2 b2|c'4 b2 a2|g2 e2 d2 c2|A6 z2|
+e2 g2 a2 b2|c'4 b2 a2|g2 e2 d2 e2|A8|
+V:2
+A,8|F,8|G,8|A,8|
+A,8|F,8|G,8|A,8|

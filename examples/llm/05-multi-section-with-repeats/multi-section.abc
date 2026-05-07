@@ -1,0 +1,14 @@
+X:1
+T:Verse and Chorus
+M:4/4
+L:1/8
+Q:1/4=110
+%%pico8 instrument 1 1
+%%pico8 instrument 2 0
+K:G
+V:1
+G2 A2 B2 c2|d2 c2 B2 A2|
+|: G2 A2 B2 d2 | e2 d2 B2 G2 | A2 B2 c2 e2 | d4 z4 :|
+V:2
+G,8|D,8|
+|: G,8 | D,8 | E,8 | D,8 :|
