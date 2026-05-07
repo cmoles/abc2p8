@@ -42,8 +42,39 @@ export const NOISE_KIT: Kit = {
   'tom-high': { waveform: 6, pitch: 32, volume: 5, effect: 5 },
 };
 
+// Mixed kit: noise snare + hats, triangle (waveform 0) kick + toms. Gives
+// pitched body to the low-end while keeping the noise channel's snap on
+// snare/hat. Triangle in Pico-8 is the closest analogue to the NES bass
+// channel that real chiptune kicks/toms ride.
+export const HYBRID_KIT: Kit = {
+  kick: { waveform: 0, pitch: 8, volume: 5, effect: 5 },
+  snare: { waveform: 6, pitch: 24, volume: 5, effect: 5 },
+  'hat-closed': { waveform: 6, pitch: 50, volume: 4, effect: 5 },
+  'hat-open': { waveform: 6, pitch: 50, volume: 4, effect: 0 },
+  'tom-low': { waveform: 0, pitch: 14, volume: 5, effect: 5 },
+  'tom-mid': { waveform: 0, pitch: 21, volume: 5, effect: 5 },
+  'tom-high': { waveform: 0, pitch: 28, volume: 5, effect: 5 },
+};
+
+// All-pitched kit. No noise channel — snare/hats are short bright pitched
+// hits (square/pulse), kick + toms ride the triangle. Frees the noise
+// channel for use elsewhere if a tune needs it; trades realism for the
+// melodic-percussion feel of NES-era games that didn't lean on the noise
+// channel for groove.
+export const TONAL_KIT: Kit = {
+  kick: { waveform: 0, pitch: 4, volume: 6, effect: 5 },
+  snare: { waveform: 3, pitch: 30, volume: 5, effect: 5 },
+  'hat-closed': { waveform: 4, pitch: 56, volume: 3, effect: 5 },
+  'hat-open': { waveform: 4, pitch: 56, volume: 3, effect: 0 },
+  'tom-low': { waveform: 0, pitch: 12, volume: 5, effect: 5 },
+  'tom-mid': { waveform: 0, pitch: 19, volume: 5, effect: 5 },
+  'tom-high': { waveform: 0, pitch: 26, volume: 5, effect: 5 },
+};
+
 export const BUILT_IN_KITS = {
   noise: NOISE_KIT,
+  hybrid: HYBRID_KIT,
+  tonal: TONAL_KIT,
 } as const satisfies Record<string, Kit>;
 
 export type BuiltInKitName = keyof typeof BUILT_IN_KITS;

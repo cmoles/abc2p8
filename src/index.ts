@@ -32,7 +32,7 @@ export {
 } from './pico8/sections.js';
 export { mergeIntoCart } from './pico8/merge.js';
 export type { MergeOptions, MergeResult } from './pico8/merge.js';
-export { BUILT_IN_KITS, NOISE_KIT } from './pico8/kits.js';
+export { BUILT_IN_KITS, HYBRID_KIT, NOISE_KIT, TONAL_KIT } from './pico8/kits.js';
 export type { BuiltInKitName, DrumName, Kit } from './pico8/kits.js';
 
 export interface VoiceConvertOptions {

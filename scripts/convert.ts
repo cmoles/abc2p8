@@ -2,11 +2,14 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import {
   abcToPico8,
+  BUILT_IN_KITS,
   formatDiagnosticText,
   mergeIntoCart,
   type BuiltInKitName,
   type VoiceConvertOptions,
 } from '../src/index.js';
+
+const BUILT_IN_KIT_NAMES = Object.keys(BUILT_IN_KITS) as readonly BuiltInKitName[];
 
 const USAGE = `Usage: convert <input.abc | -> [-o output.p8] [--quiet] [--play] [--arp] [--arp-slow] [--instrument SPEC] [--drum-voice N]... [--kit NAME] [--merge target.p8 --sfx-at N --music-at M]
 
@@ -22,14 +25,12 @@ Diagnostics are printed to stderr; --quiet suppresses info-level diagnostics.
 --drum-voice N marks source voice index N (0-based) as a drum voice. Plain
        note letters then trigger named drum hits (c=kick, d=snare, e=hat-
        closed, f=hat-open, g=tom-low, a=tom-mid, b=tom-high). Repeatable.
---kit NAME picks a built-in kit for every drum voice. Built-in kits: noise.
+--kit NAME picks a built-in kit for every drum voice. Built-in kits: ${BUILT_IN_KIT_NAMES.join(', ')}.
 --merge TARGET.p8 splices the converted music into an existing cart, leaving
        all other sections untouched. Requires --sfx-at N and --music-at M
        (0-based slot offsets). Music patterns are rebased to point at the
        new SFX indices.
 Exits 1 if any error diagnostics were emitted.`;
-
-const BUILT_IN_KIT_NAMES: readonly BuiltInKitName[] = ['noise'];
 
 interface Args {
   input: string;

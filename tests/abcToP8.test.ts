@@ -4,11 +4,15 @@ import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   abcToPico8,
+  BUILT_IN_KITS,
   EMPTY_MUSIC_LINE,
   EMPTY_SFX_LINE,
   extractSection,
+  HYBRID_KIT,
   mergeIntoCart,
   NOISE_KIT,
+  TONAL_KIT,
+  type BuiltInKitName,
   type Kit,
 } from '../src/index.js';
 
@@ -1353,5 +1357,65 @@ describe('abcToPico8 — slice 8 (drum voice)', () => {
         (d) => d.severity === 'error' && d.code === 'DRUM_DIRECTIVE_INVALID',
       ),
     ).toBe(true);
+  });
+});
+
+describe('abcToPico8 — slice 9 (drum kit presets)', () => {
+  const slotHex = (line: string, i: number): string =>
+    line.slice(8 + i * 5, 8 + (i + 1) * 5);
+  const hitHex = (hit: { pitch: number; waveform: number; volume: number; effect: number }): string =>
+    `${hit.pitch.toString(16).padStart(2, '0')}${hit.waveform.toString(16)}${hit.volume.toString(16)}${hit.effect.toString(16)}`;
+
+  // c=kick, d=snare, e=hat-closed, f=hat-open, g=tom-low, a=tom-mid, b=tom-high.
+  const ALL_HITS_ABC =
+    'X:1\nM:7/4\nL:1/4\nQ:1/4=120\nK:C\nV:1\nc d e f g a b|\n';
+  const HIT_ORDER: readonly (keyof Kit)[] = [
+    'kick',
+    'snare',
+    'hat-closed',
+    'hat-open',
+    'tom-low',
+    'tom-mid',
+    'tom-high',
+  ];
+
+  it('exports HYBRID_KIT and TONAL_KIT in BUILT_IN_KITS', () => {
+    expect(BUILT_IN_KITS).toEqual({
+      noise: NOISE_KIT,
+      hybrid: HYBRID_KIT,
+      tonal: TONAL_KIT,
+    });
+  });
+
+  it.each<[BuiltInKitName, Kit]>([
+    ['hybrid', HYBRID_KIT],
+    ['tonal', TONAL_KIT],
+  ])('renders every drum letter via the %s kit', (name, kit) => {
+    const result = abcToPico8(ALL_HITS_ABC, {
+      voices: [{ drum: true, kit: name }],
+    });
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+
+    const line = extractSection(result.p8, '__sfx__')[0]!;
+    expect(HIT_ORDER.map((_, i) => slotHex(line, i))).toEqual(
+      HIT_ORDER.map((hit) => hitHex(kit[hit])),
+    );
+  });
+
+  it('hybrid kick/toms ride a tonal waveform; snare/hats stay on noise', () => {
+    // Verifies the kit's identity (mixed) — not an arbitrary fingerprint.
+    expect(HYBRID_KIT.kick.waveform).not.toBe(6);
+    expect(HYBRID_KIT['tom-low'].waveform).not.toBe(6);
+    expect(HYBRID_KIT['tom-mid'].waveform).not.toBe(6);
+    expect(HYBRID_KIT['tom-high'].waveform).not.toBe(6);
+    expect(HYBRID_KIT.snare.waveform).toBe(6);
+    expect(HYBRID_KIT['hat-closed'].waveform).toBe(6);
+    expect(HYBRID_KIT['hat-open'].waveform).toBe(6);
+  });
+
+  it('tonal kit uses no noise channel for any hit', () => {
+    for (const hit of HIT_ORDER) {
+      expect(TONAL_KIT[hit].waveform).not.toBe(6);
+    }
   });
 });

@@ -267,27 +267,80 @@ sounding" tunes — chiptunes need drums to land.
   silently ignored on drum voices — the kit drives per-hit waveform —
   so callers can spread shared per-voice config without bookkeeping.
 
+## Slice 9 — Drum-kit presets (shipped)
+
+Tonal variety beyond the `'noise'` kit shipped in slice 8. "Finished-
+sounding" tunes need more than one drum palette, and slice 8 explicitly
+punted preset design pending real use.
+
+- Two named built-in kits added to `src/pico8/kits.ts` alongside
+  `'noise'`: `'hybrid'` (triangle kick + toms with noise snare/hats)
+  and `'tonal'` (all pitched, no noise channel — triangle kick/toms,
+  square snare, pulse hats). Same `Kit` shape as slice 8; no IR or
+  pipeline changes.
+- CLI `--kit <name>` and the playground kit dropdown both pick up the
+  new entries. The CLI's accepted-name list is now derived from
+  `BUILT_IN_KITS` so additional presets won't need a CLI patch.
+- No new diagnostics — `DRUM_KIT_INVALID` already covers unknown names,
+  and built-in kits are author-validated.
+
+**Resolved decisions**
+- Kit hit shapes use effect=5 (fade-out) on every articulating slot,
+  matching slice 8's noise-kit pattern. This keeps sustained drum
+  notes re-articulating consistently across all built-in kits;
+  hat-open's effect=0 (sustain) is the one intentional exception.
+
+## Slice 10 — LLM authoring guide (next)
+
+**Goal:** make it possible for an LLM to write idiomatic ABC for this
+pipeline without trial-and-error. Doubles as failure-mode discovery for
+slice 11 (inspector) — writing the guide forces us to catalogue what
+goes wrong, which becomes the inspector's target list.
+
+- `AGENTS.md` at repo root: pipeline-aware authoring guide (channel
+  budget, chord arity, slot grid, drum vocabulary, instrument
+  selection, repeat semantics, common diagnostics and how to avoid
+  them). Style: machine-readable, like CLAUDE.md but written for any
+  LLM consuming the repo.
+- `examples/llm/` recipe library: one ABC + expected-cart pair per
+  use case (melody only, melody + pad, melody + bass + drums, drum
+  pattern, multi-section tune with repeats, chord comping with
+  auto-arp). Each recipe has a short README explaining what it
+  demonstrates and the diagnostics it should *not* produce.
+- No library code changes expected. Any pipeline gaps surfaced by the
+  recipes (e.g. an ornament that should round-trip but doesn't) get
+  written up as candidate follow-on slices, not patched inline.
+- Output: a catalogued list of LLM failure modes, which feeds slice 11.
+
+## Slice 11 — Inspector / lint tooling
+
+**Goal:** programmatic evaluation of converter output, scoped against
+the real failure modes catalogued in slice 10 rather than speculative
+ones. Substitutes "ear" for LLMs that can't hear the output.
+
+- CLI + library export returning structural facts: per-voice pitch
+  range, slot grid, chord onsets, voice-activity timeline, drum-hit
+  density, instrument assignments per voice.
+- Algorithmic warnings drawn from slice 10's failure-mode list. Likely
+  starters: silent voice, register clash, no rests, monotonic rhythm,
+  pitch clamped at range edges, drums-only-on-downbeat, channel-budget
+  near-miss.
+- Optional ASCII piano-roll output for human spot-checks.
+
 ## Not yet scoped
 
-- Inspector / lint tooling for LLM authoring — programmatic surface
-  (CLI + library export) returning structural facts (per-voice pitch
-  range, slot grid, chord onsets, voice-activity timeline) plus
-  algorithmic warnings (silent voice, register clash, no rests,
-  monotonic rhythm, pitch clamped at range edges). Optional ASCII
-  piano-roll output. Substitute "ear" for LLMs that can't hear the
-  output. **Lead slice 9 candidate** — most useful once drums land,
-  since a 4-piece arrangement gives the lint more interesting things
-  to say than a melody-and-pad.
+Order roughly reflects "next-after-slice-11" priority but isn't
+committed:
+
+- Reverse direction (Pico-8 cart → ABC). Natural follow-on to the
+  inspector once IR ↔ cart parity is well-tested.
+- ABC ornaments (trills, grace notes) — currently silently dropped.
+  Promote if slice 10 surfaces them as real LLM-output content.
+- Effects beyond the basics already in IR (`src/ir/types.ts`) — fade,
+  vibrato, slide, drop. Promote if slice 10 surfaces dynamics gaps.
 - Per-note instrument changes within a voice (melodic voices). Drum
   voices already do this by design in slice 8.
-- Effects beyond the basics already in IR (`src/ir/types.ts`).
-- ABC ornaments (trills, grace notes) — currently silently dropped.
-- Reverse direction (Pico-8 cart → ABC).
 - PNG cart format (`.p8.png`) input/output.
-- Named drum-kit presets beyond `'noise'` (`'hybrid'`, `'tonal'`, etc.).
-  Deferred from slice 8.
-- LLM authoring guide (`AGENTS.md` + `examples/llm/` recipe library).
-  Scope was drafted but punted in favor of building out tooling first.
 - Multi-track jukebox cart (bundle N tunes + Lua picker into one cart).
   Was drafted as the original slice 6; superseded by slice 7's merge
   flow, which lets users assemble jukeboxes themselves in their own

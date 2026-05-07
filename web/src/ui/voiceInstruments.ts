@@ -14,6 +14,8 @@ const WAVEFORM_LABELS: readonly string[] = [
 
 const KIT_LABELS: readonly { id: BuiltInKitName; label: string }[] = [
   { id: 'noise', label: 'Noise (NES-classic)' },
+  { id: 'hybrid', label: 'Hybrid (noise + pitched kick/toms)' },
+  { id: 'tonal', label: 'Tonal (all pitched)' },
 ];
 
 export interface VoiceConfigSelections {
