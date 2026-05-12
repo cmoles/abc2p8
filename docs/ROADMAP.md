@@ -306,35 +306,170 @@ punted preset design pending real use.
 - Catalogue of LLM failure modes lives at
   [docs/llm-failure-modes.md](llm-failure-modes.md) and feeds slice 11.
 
-## Slice 11 — Inspector / lint tooling
+## Slice 11 — Inspector / lint tooling (shipped)
 
-**Goal:** programmatic evaluation of converter output, scoped against
-the real failure modes catalogued in slice 10 rather than speculative
-ones. Substitutes "ear" for LLMs that can't hear the output.
+Programmatic evaluation of converter output, scoped against the real
+failure modes catalogued in slice 10. Substitutes "ear" for LLMs that
+can't hear the cart.
 
-- CLI + library export returning structural facts: per-voice pitch
-  range, slot grid, chord onsets, voice-activity timeline, drum-hit
-  density, instrument assignments per voice.
-- Algorithmic warnings drawn from slice 10's failure-mode list. Likely
-  starters: silent voice, register clash, no rests, monotonic rhythm,
-  pitch clamped at range edges, drums-only-on-downbeat, channel-budget
-  near-miss.
-- Optional ASCII piano-roll output for human spot-checks.
+- New `inspect(abc, opts) → InspectionResult` and `renderPianoRoll`
+  exports in `src/index.ts`. The inspector runs the pipeline through
+  quantize (no emit) using the same `ConvertOptions` shape as
+  `abcToPico8`, so the reported facts match what the cart would
+  contain.
+- **Structural facts** on the result: `speed`, `slotTicks`,
+  `beatSlots`, `totalSlots`, `totalBlocks`, `channelsUsed` +
+  `channelsRemaining`, optional `loop: {beginSlot, endSlot}`. Per
+  voice: `id`, `kind`, post-resolution `instrument`, `noteCount`,
+  `noteSlots`, `restSlots`, `pitchRange` (Pico-8 + MIDI),
+  `durationHistogram` (slots → count), `durationEntropy` (Shannon,
+  base 2), `chordOnsets` (arp), `drumHits` (name → count, when a kit
+  is configured), `drumOnsetSlots`, and a precomputed `roll` string.
+- **Findings** — seven algorithmic checks drawn from
+  [docs/llm-failure-modes.md](llm-failure-modes.md):
+  `SILENT_VOICE` (warn), `REGISTER_CLASH`, `NO_RESTS`,
+  `MONOTONIC_RHYTHM`, `PITCH_AT_RANGE_EDGE`, `DRUMS_ON_DOWNBEAT`,
+  `CHANNEL_BUDGET_TIGHT`. `MONOTONIC_RHYTHM` and `NO_RESTS` skip drum
+  voices (uniform durations are inherent to drumming).
+- **ASCII piano-roll** via `renderPianoRoll(result, { maxSlots? })`:
+  one row per voice, one char per slot. `|` onset, `=` sustain,
+  `.` rest; drum voices use per-hit letters (`k`/`s`/`h`/`o`/`l`/`m`/`H`,
+  `?` for unmapped). Ruler row marks beat positions.
+- **CLI** `npm run inspect <input.abc>` prints a human-readable report
+  plus the piano-roll (text mode is default; `--json` for machine
+  consumption, `--max-slots N` to truncate the roll). Accepts the
+  same `--arp`, `--instrument`, `--drum-voice`, `--kit` flags as
+  `convert`.
+- AGENTS.md gains an "Inspecting before you ship" section with the
+  finding table and the piano-roll legend.
+- Internal `QuantizedScore` now exposes `slotTicks` directly (was
+  recomputable from speed/bpm but error-prone). No behaviour change to
+  the emit path.
+
+**Resolved decisions**
+- Inspector reports findings; it never auto-fixes. LLMs revise the
+  ABC themselves. Auto-rewrite is out of scope and probably always
+  will be (a tool that "fixes" musical mistakes silently is worse
+  than a tool that flags them).
+- The seven checks above are the v1 set. Items 14–17 from the
+  failure-mode catalogue (identical-instrument voices, drum-kit +
+  melodic-noise voice, `L:` granularity mismatch, tied-chord glide)
+  are deferred — they trigger less often in real LLM output and
+  the v1 set covers the failure modes that hit the audition-CLI
+  recipes during slice 10.
+- Drum-hit names are reverse-matched against the configured kit's
+  `(waveform, pico8 pitch, volume, effect)` tuple. Hits that don't
+  match any kit entry surface as `unknown` rather than being silently
+  dropped — useful when a custom kit's tuples drifted from the IR's
+  expectations.
+
+## Slice 12 — Pico-8 cart → ABC (reverse direction)
+
+**Goal:** take an existing `.p8` cart's `__sfx__` + `__music__`
+sections and emit ABC that round-trips through `abcToPico8` back to
+(approximately) the same cart. The natural follow-on to slice 11:
+once the inspector can decompose a cart into voice-level structural
+facts, generating ABC is the same problem with a different output
+formatter.
+
+- New `pico8ToAbc(p8, opts) → { abc, diagnostics }` exported from
+  `src/index.ts`. Parses the cart's SFX + music sections, walks
+  music patterns to reconstruct a per-channel slot timeline, then
+  inverse-quantizes into IR `Score` and serializes to ABC.
+- Pipeline is the existing one in reverse:
+  `cart text → sections (src/pico8/sections.ts)
+    → unpack SFX rows + music rows (new src/pico8/unpack.ts)
+    → channels × slots (new src/pipeline/dequantize.ts)
+    → Score IR → ABC text (new src/abc/fromIR.ts)`.
+  The IR is the bridge — same `Score`/`Voice`/`Note` types both
+  directions, so slice-11's structural-facts logic re-applies.
+- **Voice mapping:** one voice per channel that has non-silent
+  content somewhere in the music sequence. Channels marked silent
+  on every played pattern are dropped (no `V:` emitted). Channel
+  index → voice number is the natural 1:N mapping.
+- **Slot grid → `L:`:** pick the longest unit length that makes
+  every note's duration an integer multiple. Inverse of quantize's
+  GCD step. Defaults to `L:1/8` when the grid is ambiguous.
+- **Tempo:** invert quantize's `speedFromSlot` to recover
+  quarter-bpm; emit `Q:1/4=<bpm>` rounded to the nearest integer.
+- **Repeats:** Pico-8's loop-start / loop-end flags on music rows
+  → ABC `|: ... :|`. A single contiguous loop region is the only
+  Pico-8-expressible shape, so this is always at most one region.
+  No loop → no repeat bars.
+- **Instrument inference:** for each voice, the modal waveform
+  across its slots wins; emitted as `%%pico8 instrument <V> <wave>`.
+  Mixed-waveform voices (only drum voices in cart output) skip
+  the directive.
+- **Drum detection:** for each voice, compare its
+  `(waveform, pico8 pitch, volume, effect)` tuples against the
+  built-in kits. If all hits match one kit and at least 3 distinct
+  drum names appear, mark the voice with `%%pico8 drum <V>` and
+  reverse-map pitches → drum letters. Mismatches fall back to
+  emitting raw pitches as a melodic voice with a
+  `REVERSE_NONSTANDARD_DRUM` info.
+- **Arp detection:** a run of slots with `effect=6`/`effect=7` and
+  the same 4-slot-aligned pitch group is collapsed back to an ABC
+  chord `[CEG]` of the underlying pitches. Detected groups must
+  align to absolute SFX positions 0–3, 4–7, … (mirror of the arp
+  emit path).
+- **CLI:** `npm run reverse <input.p8> [-o output.abc]`. Reads `.p8`,
+  writes ABC to stdout (or `-o`). Diagnostics on stderr.
+- **Playground:** existing "Paste ABC" textarea gets a sibling
+  "Load cart…" button: file-picker for `.p8`, populates the textarea
+  with the reverse-converted ABC and re-runs convert for instant
+  round-trip preview.
+- **Diagnostics:**
+  - `REVERSE_TARGET_INVALID` (error) — `.p8` lacks `pico-8 cartridge`
+    header or has malformed `__sfx__` / `__music__` sections.
+  - `REVERSE_UNKNOWN_EFFECT` (warn) — slot carries an effect value
+    not in {0, 5, 6, 7}; preserved as raw IR but flagged because
+    the round-trip won't re-emit it through `abcToPico8`.
+  - `REVERSE_NONSTANDARD_DRUM` (info) — voice looks drum-like
+    (waveform 6 dominant or noise-channel-heavy) but didn't match
+    a built-in kit; emitted as melodic.
+  - `REVERSE_AMBIGUOUS_SFX` (info) — the same SFX index is
+    referenced from multiple channels in the music sequence (rare
+    but legal); the first channel-binding wins and others are
+    flagged.
+  - `REVERSE_FEATURE_DROPPED` (warn) — SFX shape uses pitches,
+    velocities, or effects that `abcToPico8` doesn't author
+    (per-slot velocity changes, slide/vibrato/drop effects);
+    preserved in the emitted ABC as a comment but won't round-trip
+    cleanly.
+
+**Resolved decisions to bake in**
+- The reverse direction targets *one-shot decode*, not bit-for-bit
+  round-trip stability. Carts authored in the Pico-8 tracker often
+  use SFX features (slide, vibrato, dynamic volume) that the
+  forward pipeline doesn't emit; we preserve what we can in the
+  IR comment trail and flag the rest.
+- ABC output is generated, not pretty-printed. Bar lines come from
+  the cart's time signature (default 4/4); no phrase-boundary
+  detection.
+- One target format: `.p8` text. `.p8.png` carts stay out of scope
+  for the same reasons slice 7 deferred them.
+- The reverse pipeline runs the *quantized* layout the cart already
+  has — no re-quantization. If the cart's slot grid is finer than
+  `abcToPico8` would have picked, the round-trip will quantize back
+  to a coarser grid; this is a known asymmetry, not a bug.
 
 ## Not yet scoped
 
-Order roughly reflects "next-after-slice-11" priority but isn't
+Order roughly reflects "next-after-slice-12" priority but isn't
 committed:
 
-- Reverse direction (Pico-8 cart → ABC). Natural follow-on to the
-  inspector once IR ↔ cart parity is well-tested.
 - ABC ornaments (trills, grace notes) — currently silently dropped.
   Promote if slice 10 surfaces them as real LLM-output content.
 - Effects beyond the basics already in IR (`src/ir/types.ts`) — fade,
-  vibrato, slide, drop. Promote if slice 10 surfaces dynamics gaps.
+  vibrato, slide, drop. Promote if slice 10 surfaces dynamics gaps,
+  or slice 12 reveals real-world carts that rely on them.
 - Per-note instrument changes within a voice (melodic voices). Drum
   voices already do this by design in slice 8.
 - PNG cart format (`.p8.png`) input/output.
+- Inspector v2 checks: identical-instrument voices, drum-kit +
+  melodic-noise channel, `L:` granularity mismatch, tied-chord
+  glide attempts. Items 14–17 in
+  [docs/llm-failure-modes.md](llm-failure-modes.md).
 - Multi-track jukebox cart (bundle N tunes + Lua picker into one cart).
   Was drafted as the original slice 6; superseded by slice 7's merge
   flow, which lets users assemble jukeboxes themselves in their own

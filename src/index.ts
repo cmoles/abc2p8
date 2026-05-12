@@ -34,6 +34,15 @@ export { mergeIntoCart } from './pico8/merge.js';
 export type { MergeOptions, MergeResult } from './pico8/merge.js';
 export { BUILT_IN_KITS, HYBRID_KIT, NOISE_KIT, TONAL_KIT } from './pico8/kits.js';
 export type { BuiltInKitName, DrumName, Kit } from './pico8/kits.js';
+export { inspect, renderPianoRoll } from './inspect.js';
+export type {
+  FindingCode,
+  InspectionFinding,
+  InspectionResult,
+  PianoRollOptions,
+  PitchRange,
+  VoiceInspection,
+} from './inspect.js';
 
 export interface VoiceConvertOptions {
   // Pico-8 waveform 0–7. Indexed by source ABC voice (V1 → 0, V2 → 1, …);

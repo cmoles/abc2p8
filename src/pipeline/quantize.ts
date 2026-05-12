@@ -11,6 +11,7 @@ import {
 
 export interface QuantizedScore {
   speed: number;
+  slotTicks: number;
   voices: QuantizedVoice[];
   loop?: { beginBlock: number; endBlock: number };
 }
@@ -231,7 +232,7 @@ export function quantize(score: Score, diagnostics: Diagnostics): QuantizedScore
     }
   }
 
-  return loop ? { speed, voices, loop } : { speed, voices };
+  return loop ? { speed, slotTicks, voices, loop } : { speed, slotTicks, voices };
 }
 
 function padArpPitches(pitches: number[]): number[] {

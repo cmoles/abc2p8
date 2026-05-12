@@ -241,9 +241,42 @@ CLI: `npm run convert <input.abc> -o <out.p8>`. Flags:
 `--drum-voice N` (repeatable), `--kit noise|hybrid|tonal`,
 `--merge target.p8 --sfx-at N --music-at M`.
 
+## Inspecting before you ship
+
+LLMs can't hear the cart, so use the inspector to evaluate output programmatically.
+`inspect(abcSource, opts)` returns the same compile diagnostics plus
+**structural facts** (per-voice pitch range, note count, rest density, slot grid,
+chord-onset count, channel usage, loop boundaries, drum-hit histogram) and
+**findings** — algorithmic warnings drawn from the failure-mode catalogue at
+[docs/llm-failure-modes.md](docs/llm-failure-modes.md):
+
+| Code | Fires when | Why it matters |
+|---|---|---|
+| `SILENT_VOICE` | voice has zero onsets | wasted channel |
+| `REGISTER_CLASH` | two melodic voices' pitch ranges overlap by >70% | audibly muddy |
+| `NO_RESTS` | rest fraction <5% across ≥32 slots (melodic only) | exhausting to listen to |
+| `MONOTONIC_RHYTHM` | duration entropy <0.5 bits and ≥8 notes (melodic only) | rhythmic stiffness |
+| `PITCH_AT_RANGE_EDGE` | a voice touches Pico-8 pitch 0–1 or 62–63 | thin/dull tone |
+| `DRUMS_ON_DOWNBEAT` | every drum onset lands on a beat (no offbeats) | mechanical groove |
+| `CHANNEL_BUDGET_TIGHT` | all 4 channels used (no room for chords later) | future overflow risk |
+
+CLI: `npm run inspect <input.abc>` prints a human-readable report plus an ASCII
+piano-roll. `--json` for the raw `InspectionResult`; `--max-slots N` to truncate
+the roll. The inspector accepts the same convert flags (`--arp`, `--instrument`,
+`--drum-voice`, `--kit`), so the facts reflect the exact cart your convert call
+would produce.
+
+Piano-roll legend: `|` onset, `=` sustain, `.` rest; drum voices show one letter
+per hit (`k`/`s`/`h`/`o`/`l`/`m`/`H` for kick/snare/hat-c/hat-o/tom-l/tom-m/tom-H,
+`?` for an unmapped hit).
+
+The inspector lints — it never fixes. Treat findings as prompts to revise the
+ABC, not as compile errors.
+
 ## When in doubt
 
 1. Run `npm run convert <abc-file>` and read the diagnostics on stderr.
-2. Cross-reference codes against [docs/limits.md](docs/limits.md).
-3. Look at the closest [examples/llm/](examples/llm/) recipe.
-4. Pico-8's tracker model is in [docs/pico8-format.md](docs/pico8-format.md).
+2. Run `npm run inspect <abc-file>` to see structural facts and findings.
+3. Cross-reference codes against [docs/limits.md](docs/limits.md).
+4. Look at the closest [examples/llm/](examples/llm/) recipe.
+5. Pico-8's tracker model is in [docs/pico8-format.md](docs/pico8-format.md).
