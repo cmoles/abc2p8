@@ -116,6 +116,28 @@ describe('pico8ToAbc — end-to-end on example carts', () => {
       result.diagnostics.some((d) => d.code === 'REVERSE_TARGET_INVALID' && d.severity === 'error'),
     ).toBe(true);
   });
+
+  it('truncates multi-section music carts to the first section and warns', () => {
+    // Two loop regions (rows 0-1 and 2-3) using a single short SFX.
+    const sfxLine =
+      '011e0000' + '18050' + '00000'.repeat(31);
+    const cart =
+      `pico-8 cartridge // http://www.pico-8.com\n` +
+      `version 41\n` +
+      `__lua__\n` +
+      `__sfx__\n${sfxLine}\n${sfxLine}\n` +
+      `__music__\n` +
+      `01 00414243\n` +
+      `02 01414243\n` +
+      `01 01414243\n` +
+      `02 00414243\n`;
+    const result = pico8ToAbc(cart);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(result.diagnostics.some((d) => d.code === 'REVERSE_MULTI_SECTION')).toBe(true);
+    // Forward pipeline accepts the truncated tune.
+    const forward = abcToPico8(result.abc);
+    expect(forward.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
 });
 
 describe('pico8ToAbc — bit-perfect round-trip on shipped examples', () => {

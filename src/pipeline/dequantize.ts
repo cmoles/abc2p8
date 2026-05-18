@@ -203,7 +203,23 @@ function buildChannelTimelines(
   const sfxChannelBinding = new Map<number, number>(); // sfx idx -> first channel
   const ambiguousReported = new Set<number>();
 
-  for (let r = 0; r < cart.music.length; r += 1) {
+  // Multi-section music (carts that play different songs via several
+  // music() calls) shows up as multiple begin-loop / end-loop pairs in the
+  // sequence. The forward path can only express one |: :| region, so cap
+  // the decode at the end of the first section and warn. Without this the
+  // reverse path concatenates every section into one mega-tune that
+  // typically blows past the 64-SFX-slot budget on round-trip.
+  const sectionEnd = detectFirstSectionEnd(cart.music);
+  const lastRow = sectionEnd !== null ? sectionEnd.endRow : cart.music.length - 1;
+  if (sectionEnd?.multiSection) {
+    diagnostics.warn(
+      'parse',
+      'REVERSE_MULTI_SECTION',
+      `Cart has multiple loop sections (begin/end-loop pairs); decoding only rows 0–${sectionEnd.endRow}. Edit the source cart to extract a single section if a different one is desired.`,
+    );
+  }
+
+  for (let r = 0; r <= lastRow && r < cart.music.length; r += 1) {
     const row = cart.music[r]!;
     rowStartSlot.push(slots[0]!.length);
 
@@ -267,7 +283,38 @@ function buildChannelTimelines(
     }
   }
 
-  return { slots, rowStartSlot, rowLength, music: cart.music, playedSfxIds };
+  // Slice the music array so resolveLoopRegion sees only the section we
+  // decoded; otherwise it could grab a begin/end-loop pair from a later
+  // (truncated) section.
+  const playedMusic = cart.music.slice(0, rowStartSlot.length);
+  return { slots, rowStartSlot, rowLength, music: playedMusic, playedSfxIds };
+}
+
+interface SectionEnd {
+  endRow: number;
+  multiSection: boolean;
+}
+
+function detectFirstSectionEnd(music: Pico8MusicPattern[]): SectionEnd | null {
+  // A "section" is everything from the start (or first begin-loop) through
+  // the matching end-loop. If we see another begin-loop AFTER the first
+  // end-loop, the cart is multi-section.
+  let firstEnd: number | null = null;
+  let multi = false;
+  for (let r = 0; r < music.length; r += 1) {
+    const m = music[r]!;
+    if (m.endLoop && firstEnd === null) firstEnd = r;
+    else if (m.beginLoop && firstEnd !== null && r > firstEnd) {
+      multi = true;
+      break;
+    }
+    if (m.stop) {
+      if (firstEnd === null) firstEnd = r;
+      break;
+    }
+  }
+  if (firstEnd === null) return null;
+  return { endRow: firstEnd, multiSection: multi };
 }
 
 function effectiveSfxLength(sfx: Pico8Sfx): number {

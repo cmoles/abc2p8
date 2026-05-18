@@ -258,11 +258,16 @@ collapsed into ABC chord notation (`[CEG]`). `arpSpeed` in the result is
 preserve it on the round-trip. Non-default kits emit a `% pico8 kit V N`
 comment so the user knows which `--kit` flag to use.
 
-Diagnostics: `REVERSE_TARGET_INVALID` (error), `REVERSE_UNKNOWN_EFFECT`
-(warn, slide/vibrato/drop), `REVERSE_FEATURE_DROPPED` (warn, e.g. mixed
-waveforms within a melodic voice), `REVERSE_NONSTANDARD_DRUM` (info,
-drum-like voice that didn't match a built-in kit), `REVERSE_AMBIGUOUS_SFX`
-(info, same SFX index referenced from multiple channels).
+Diagnostics: `REVERSE_TARGET_INVALID` (error), `REVERSE_MULTI_SECTION`
+(warn, cart has multiple begin/end-loop pairs and only the first section
+is decoded), `REVERSE_UNKNOWN_EFFECT` (warn, slide/vibrato/drop),
+`REVERSE_FEATURE_DROPPED` (warn, e.g. mixed waveforms within a melodic
+voice or out-of-range SFX byte fields), `REVERSE_NONSTANDARD_DRUM`
+(info, drum-like voice that didn't match a built-in kit),
+`REVERSE_AMBIGUOUS_SFX` (info, same SFX index referenced from multiple
+channels). Tracker-authored carts with cross-channel SFX sharing and
+multiple `music()` entry points won't round-trip — those features have
+no ABC equivalent.
 
 ## Inspecting before you ship
 
