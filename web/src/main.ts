@@ -1,7 +1,9 @@
 import {
   abcToPico8,
   formatDiagnosticParts,
+  formatDiagnosticText,
   mergeIntoCart,
+  pico8ToAbc,
   type BuiltInKitName,
   type Diagnostic,
   type VoiceConvertOptions,
@@ -22,6 +24,7 @@ const diagnosticsList = document.getElementById('diagnostics') as HTMLUListEleme
 const playerHost = document.getElementById('player-host') as HTMLDivElement;
 const voiceInstrumentsHost = document.getElementById('voice-instruments') as HTMLDivElement;
 const voiceInstrumentsList = document.getElementById('voice-instruments-list') as HTMLDivElement;
+const loadCartInput = document.getElementById('load-cart') as HTMLInputElement;
 const mergeFileInput = document.getElementById('merge-file') as HTMLInputElement;
 const mergeSfxInput = document.getElementById('merge-sfx-at') as HTMLInputElement;
 const mergeMusicInput = document.getElementById('merge-music-at') as HTMLInputElement;
@@ -178,6 +181,48 @@ downloadBtn.addEventListener('click', () => {
   a.download = 'tune.p8';
   a.click();
   URL.revokeObjectURL(url);
+});
+
+loadCartInput.addEventListener('change', async () => {
+  const file = loadCartInput.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const reversed = pico8ToAbc(text, { title: file.name.replace(/\.p8(\.png)?$/i, '') });
+    if (reversed.diagnostics.some((d) => d.severity === 'error')) {
+      // Surface errors in the diagnostics panel without overwriting the ABC.
+      const items: Diagnostic[] = reversed.diagnostics.slice();
+      renderDiagnostics(diagnosticsList, items);
+      return;
+    }
+    abcInput.value = reversed.abc;
+    // Different cart, fresh voice config.
+    voiceInstruments.clear();
+    voiceDrumKits.clear();
+    if (reversed.arpSpeed === 'slow') chordArpToggle.checked = true;
+    // Surface info/warn diagnostics from the reverse step, then re-run the
+    // forward pipeline so the player picks up the loaded cart immediately.
+    if (reversed.diagnostics.length > 0) {
+      // Pre-stamp the diagnostics so the convert call can append its own.
+      renderDiagnostics(diagnosticsList, reversed.diagnostics.slice());
+      for (const d of reversed.diagnostics) {
+        if (d.severity === 'warn' || d.severity === 'error') {
+          console.warn(formatDiagnosticText(d));
+        }
+      }
+    }
+    await convert();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    diagnosticsList.innerHTML = '';
+    const li = document.createElement('li');
+    li.className = 'error';
+    li.textContent = `Failed to read cart: ${msg}`;
+    diagnosticsList.appendChild(li);
+  } finally {
+    // Allow re-selecting the same file again.
+    loadCartInput.value = '';
+  }
 });
 
 mergeFileInput.addEventListener('change', async () => {

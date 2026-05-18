@@ -27,6 +27,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "convert": "tsx scripts/convert.ts",
     "inspect": "tsx scripts/inspect.ts",
+    "reverse": "tsx scripts/reverse.ts",
     "web:dev": "vite --config web/vite.config.ts",
     "web:build": "vite build --config web/vite.config.ts",
     "web:preview": "vite preview --config web/vite.config.ts"

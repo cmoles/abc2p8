@@ -363,7 +363,7 @@ can't hear the cart.
   dropped — useful when a custom kit's tuples drifted from the IR's
   expectations.
 
-## Slice 12 — Pico-8 cart → ABC (reverse direction)
+## Slice 12 — Pico-8 cart → ABC reverse direction (shipped)
 
 **Goal:** take an existing `.p8` cart's `__sfx__` + `__music__`
 sections and emit ABC that round-trips through `abcToPico8` back to
@@ -437,12 +437,14 @@ formatter.
     preserved in the emitted ABC as a comment but won't round-trip
     cleanly.
 
-**Resolved decisions to bake in**
+**Resolved decisions**
 - The reverse direction targets *one-shot decode*, not bit-for-bit
   round-trip stability. Carts authored in the Pico-8 tracker often
   use SFX features (slide, vibrato, dynamic volume) that the
   forward pipeline doesn't emit; we preserve what we can in the
-  IR comment trail and flag the rest.
+  IR comment trail and flag the rest. In practice all six shipped
+  `examples/llm/` carts round-trip bit-perfectly (covered by a
+  `tests/reverse.test.ts` block).
 - ABC output is generated, not pretty-printed. Bar lines come from
   the cart's time signature (default 4/4); no phrase-boundary
   detection.
@@ -452,6 +454,22 @@ formatter.
   has — no re-quantization. If the cart's slot grid is finer than
   `abcToPico8` would have picked, the round-trip will quantize back
   to a coarser grid; this is a known asymmetry, not a bug.
+- Effect 4 (fade-in) is treated as an authored effect by the forward
+  emitter for same-pitch retriggers, so the reverse pipeline includes
+  it in the "known" set alongside {0, 5, 6, 7}. Unknown effects
+  ({1, 2, 3}: slide/vibrato/drop) surface as `REVERSE_UNKNOWN_EFFECT`.
+- Drum-kit detection uses a ≥2-distinct-name threshold (not ≥3) so
+  drum-chord sibling voices that only carry 1–2 drum letters still
+  resolve as drum voices. The alternative (≥3) leaks per-hit volume
+  on chord siblings, breaking the round-trip.
+- Sustained drum hits get over-segmented into per-slot 1-slot notes
+  in the IR. This is intentional: forward emit stamps the kit tuple
+  on every slot anyway, so the cart bytes are identical — the IR
+  shape just doesn't preserve the "this was one held note" intent.
+- Non-`'noise'` built-in kits emit a `% pico8 kit V N` comment in the
+  ABC so the human round-trip user knows to pass `--kit <name>`. No
+  ABC directive equivalent exists today, so the kit metadata can't
+  flow back through `abcToPico8` automatically.
 
 ## Not yet scoped
 

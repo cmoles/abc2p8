@@ -1,7 +1,8 @@
 import { parseAbc } from './abc/parse.js';
 import { abcToScore, type ChordStrategy, type VoiceDrumConfig } from './abc/toIR.js';
+import { fromIR } from './abc/fromIR.js';
 import { Diagnostics, type Diagnostic } from './ir/diagnostics.js';
-import { DEFAULT_INSTRUMENT, DEFAULT_VOLUME } from './pico8/constraints.js';
+import { DEFAULT_INSTRUMENT, DEFAULT_VOLUME, EFFECT_ARP_SLOW } from './pico8/constraints.js';
 import { emit } from './pico8/emit.js';
 import { extractPico8Directives } from './abc/instrumentDirective.js';
 import {
@@ -12,7 +13,9 @@ import {
   type BuiltInKitName,
   type Kit,
 } from './pico8/kits.js';
+import { dequantize, flagUnknownEffects } from './pipeline/dequantize.js';
 import { quantize } from './pipeline/quantize.js';
+import { unpackCart } from './pico8/unpack.js';
 
 export type {
   Diagnostic,
@@ -35,6 +38,7 @@ export type { MergeOptions, MergeResult } from './pico8/merge.js';
 export { BUILT_IN_KITS, HYBRID_KIT, NOISE_KIT, TONAL_KIT } from './pico8/kits.js';
 export type { BuiltInKitName, DrumName, Kit } from './pico8/kits.js';
 export { inspect, renderPianoRoll } from './inspect.js';
+export { unpackCart } from './pico8/unpack.js';
 export type {
   FindingCode,
   InspectionFinding,
@@ -227,3 +231,57 @@ function resolveKit(
   return requested as Kit;
 }
 
+export interface Pico8ToAbcOptions {
+  // Title to stamp into the ABC header (`T:`). Cart bytes carry no title, so
+  // we accept one from the caller (CLI passes the input filename's stem).
+  title?: string;
+}
+
+export interface Pico8ToAbcResult {
+  abc: string;
+  diagnostics: readonly Diagnostic[];
+  // Suggested arpSpeed for the round-trip — if any decoded chord used
+  // effect 7, the caller should run `abcToPico8` with arpSpeed: 'slow' to
+  // reproduce the original timbre. Absent when no chord notes were detected.
+  arpSpeed?: 'fast' | 'slow';
+}
+
+export function pico8ToAbc(p8: string, opts: Pico8ToAbcOptions = {}): Pico8ToAbcResult {
+  const diagnostics = new Diagnostics();
+  const cart = unpackCart(p8, diagnostics);
+  if (!cart) return { abc: '', diagnostics: diagnostics.list() };
+  flagUnknownEffects(cart, diagnostics);
+
+  const decoded = dequantize(cart, diagnostics);
+  if (!decoded) return { abc: '', diagnostics: diagnostics.list() };
+
+  if (opts.title) decoded.score.meta.title = opts.title;
+
+  const arpSpeed = detectArpSpeed(cart);
+
+  const abc = fromIR(decoded.score, {
+    slotsPerUnit: decoded.slotsPerUnit,
+    lDen: decoded.lDen,
+    voiceMeta: decoded.voiceMeta,
+  });
+  return {
+    abc,
+    diagnostics: diagnostics.list(),
+    ...(arpSpeed ? { arpSpeed } : {}),
+  };
+}
+
+function detectArpSpeed(cart: ReturnType<typeof unpackCart> & object): 'fast' | 'slow' | undefined {
+  let sawFast = false;
+  let sawSlow = false;
+  for (const sfx of cart.sfx.values()) {
+    for (const n of sfx.notes) {
+      if (n.volume === 0) continue;
+      if (n.effect === EFFECT_ARP_SLOW) sawSlow = true;
+      else if (n.effect === 6) sawFast = true;
+    }
+  }
+  if (sawSlow && !sawFast) return 'slow';
+  if (sawFast) return 'fast';
+  return undefined;
+}

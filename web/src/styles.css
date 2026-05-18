@@ -105,6 +105,20 @@ section {
   font-size: 0.85rem;
 }
 
+.cart-loader {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.cart-loader input[type='file'] {
+  color: var(--fg);
+  font-size: 0.8rem;
+  max-width: 14rem;
+}
+
 .output h2 {
   margin: 1rem 0 0.5rem;
   font-size: 0.95rem;

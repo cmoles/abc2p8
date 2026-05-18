@@ -241,6 +241,29 @@ CLI: `npm run convert <input.abc> -o <out.p8>`. Flags:
 `--drum-voice N` (repeatable), `--kit noise|hybrid|tonal`,
 `--merge target.p8 --sfx-at N --music-at M`.
 
+## Reverse direction: `.p8` → ABC
+
+```ts
+import { pico8ToAbc } from 'abc2p8';
+
+const { abc, diagnostics, arpSpeed } = pico8ToAbc(cartText, { title: 'mytune' });
+```
+
+CLI: `npm run reverse <input.p8> -o <output.abc>`. Reads a `.p8` cart and
+emits ABC that re-converts cleanly through `abcToPico8`. The six shipped
+`examples/llm/` carts round-trip bit-perfectly. Drum voices are detected
+by matching slot tuples against the built-in kits; chord-arp groups are
+collapsed into ABC chord notation (`[CEG]`). `arpSpeed` in the result is
+`'slow'` when the cart uses effect 7 — pass `--arp-slow` to `convert` to
+preserve it on the round-trip. Non-default kits emit a `% pico8 kit V N`
+comment so the user knows which `--kit` flag to use.
+
+Diagnostics: `REVERSE_TARGET_INVALID` (error), `REVERSE_UNKNOWN_EFFECT`
+(warn, slide/vibrato/drop), `REVERSE_FEATURE_DROPPED` (warn, e.g. mixed
+waveforms within a melodic voice), `REVERSE_NONSTANDARD_DRUM` (info,
+drum-like voice that didn't match a built-in kit), `REVERSE_AMBIGUOUS_SFX`
+(info, same SFX index referenced from multiple channels).
+
 ## Inspecting before you ship
 
 LLMs can't hear the cart, so use the inspector to evaluate output programmatically.
