@@ -54,14 +54,49 @@ c e d e c e d e|
 abcToPico8(abc, { voices: [{}, { drum: true, kit: 'noise' }] });
 ```
 
-`'noise'` is the only built-in kit today (NES-classic noise hits).
-Pass a custom `Kit` object (`Record<DrumName, { waveform, pitch, volume,
-effect }>`) for anything else; spread `NOISE_KIT` to override one drum
-at a time. Note durations apply normally — a half-note kick holds the
-same SFX shape across both slots. Drum chords expand to sibling
-channels (`[ce]` = simultaneous kick + hat = 2 channels), so they
-count against the 4-channel budget like melodic chords. CLI flags:
-`--drum-voice N` (0-based, repeatable) and `--kit noise`.
+Three built-in kits: `'noise'` (NES-classic all-noise), `'hybrid'`
+(triangle kick + toms with noise snare/hats), and `'tonal'` (all
+pitched, no noise channel). Pass a custom `Kit` object
+(`Record<DrumName, { waveform, pitch, volume, effect }>`) for anything
+else; spread `NOISE_KIT` to override one drum at a time. Note durations
+apply normally — a half-note kick holds the same SFX shape across both
+slots. Drum chords expand to sibling channels (`[ce]` = simultaneous
+kick + hat = 2 channels), so they count against the 4-channel budget
+like melodic chords. CLI flags: `--drum-voice N` (0-based, repeatable)
+and `--kit noise|hybrid|tonal`.
+
+## Inspecting before you ship
+
+`inspect(abc, opts)` runs the pipeline through quantize (no emit) and
+returns structural facts plus algorithmic findings — useful for LLM
+authors that can't hear the cart. Findings cover silent voices,
+register clash, monotonic rhythm, channel-budget tightness, drums on
+downbeats, and pitch-at-range-edge. `renderPianoRoll(result)` produces
+an ASCII roll for quick visual checks. CLI: `npm run inspect <input.abc>`
+(add `--json` for machine output, `--max-slots N` to truncate the roll).
+See [AGENTS.md](AGENTS.md#inspecting-before-you-ship) for the full
+finding table and roll legend.
+
+## Reverse direction: `.p8` → ABC
+
+```ts
+import { pico8ToAbc, listSections } from 'abc2p8';
+const { abc, diagnostics, sections, decodedSection } = pico8ToAbc(cartText);
+```
+
+`pico8ToAbc` decodes an existing cart into ABC that re-converts through
+`abcToPico8`. All six shipped `examples/llm/` carts round-trip
+bit-perfectly. Drum voices and chord-arp groups are auto-detected.
+Multi-track carts (multiple `music(N)` entry points) expose each track
+in `result.sections`; pass `section: N` to decode a different one, or
+call `listSections(p8)` to enumerate without decoding. CLI:
+`npm run reverse <input.p8> -o <output.abc>` with `--section N` and
+`--list-sections`. The web playground (`npm run web:dev`) has a Load
+cart button + section dropdown that wraps the same code.
+
+Tracker-authored features the forward path can't author — cross-channel
+SFX sharing, slide/vibrato/drop effects, per-slot velocity changes —
+get flagged via `REVERSE_*` diagnostics and don't round-trip.
 
 ## Merging into an existing cart
 
@@ -83,7 +118,10 @@ verbatim.
 ## Limitations
 
 abc2p8 is built in vertical slices; each slice lifts a class of restrictions.
-Slices 1–8 are shipped:
+Slices 1–12 are shipped (single-voice monophonic → long tunes → multi-voice
+→ chords → web playground → per-voice instruments → cart merging → drum
+voices → drum-kit presets → LLM authoring guide → inspector → reverse
+direction):
 
 - **Up to 4 voices** (one per Pico-8 channel). `V:1`…`V:4` map to channels in
   declaration order; more than 4 errors with `TOO_MANY_VOICES`.
@@ -107,4 +145,6 @@ Slices 1–8 are shipped:
 
 For the full list of diagnostic codes, severities, and what each one means,
 see [docs/limits.md](docs/limits.md). The roadmap of upcoming slices lives
-in [docs/ROADMAP.md](docs/ROADMAP.md).
+in [docs/ROADMAP.md](docs/ROADMAP.md). LLM authoring guidance and the full
+recipe library live in [AGENTS.md](AGENTS.md) and
+[examples/llm/](examples/llm/).

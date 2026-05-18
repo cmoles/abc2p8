@@ -36,6 +36,13 @@ Anything beyond these surfaces as one of the codes below.
 |---|---|---|
 | `EMPTY_INPUT` | error | abcjs parsed nothing; no `X:` header or no playable content. |
 | `MULTIPLE_TUNES` | warn | Input contains more than one `X:` block; only the first is converted. |
+| `REVERSE_TARGET_INVALID` | error | `pico8ToAbc` got a string that's missing the `pico-8 cartridge` header, has malformed `__sfx__` / `__music__` sections, or has no non-silent music rows. |
+| `REVERSE_SECTION_OUT_OF_RANGE` | warn | `pico8ToAbc(p8, { section })` was passed a section index outside `[0, sections.length)`; fell back to section 0. |
+| `REVERSE_FEATURE_DROPPED` | warn | Cart uses SFX features the forward path doesn't author (e.g. mixed waveforms within a single voice, out-of-range SFX byte fields, multiple SFX speeds, music rows referencing a missing SFX slot). Surface and preserve where possible; round-trip will lose them. |
+| `REVERSE_UNKNOWN_EFFECT` | warn | Cart uses an SFX effect outside `{0, 4, 5, 6, 7}` (i.e. slide / vibrato / drop). The forward path won't re-emit it; the IR carries it but the round-trip drops the effect. |
+| `REVERSE_MULTI_SECTION` | info | Cart exposes multiple `music(N)` tracks; the decode picked one. `result.sections` enumerates the rest; pass `section: N` to decode another. |
+| `REVERSE_NONSTANDARD_DRUM` | info | A voice was noise-dominant (looks drum-like) but its slot tuples didn't match any built-in kit; emitted as melodic instead of with `%%pico8 drum`. |
+| `REVERSE_AMBIGUOUS_SFX` | info | One SFX index is referenced from more than one channel across the music sequence; the first channel binding wins. |
 
 ### toIR (`src/abc/toIR.ts`)
 
@@ -59,6 +66,8 @@ Anything beyond these surfaces as one of the codes below.
 | `DRUM_DIRECTIVE_INVALID` | error | A `%%pico8 drum` directive was malformed (expected `<voiceNumber>` with a positive integer). |
 | `DRUM_KIT_INVALID` | error | `voices[i].kit` was an unknown built-in name, or a custom `Kit` was missing entries / had out-of-range fields. |
 | `DRUM_HIT_UNKNOWN` | warn | A drum-voice note carried an accidental (`^c`, `_e`, …); the v1 letter map covers the 7 plain letters only, so the hit dropped to a rest. |
+| `CHORD_TOO_WIDE` | warn | An arp chord has more than 4 distinct pitches; truncated to the lowest 4. |
+| `AUTO_ARP_FALLBACK` | info | `chordStrategy: 'auto'` would have needed more than 4 channels in expand mode, so the converter picked arp instead. |
 | `PICO8_DIRECTIVE_UNKNOWN` | error | A `%%pico8 …` line used a sub-keyword other than `instrument` or `drum`. |
 | `KEY_CHANGE` | info | Mid-tune `K:` change applied. |
 | `METER_CHANGE_IGNORED` | info | Mid-tune meter change ignored; pico-8 has no meter concept. |
@@ -79,6 +88,7 @@ Anything beyond these surfaces as one of the codes below.
 |---|---|---|
 | `EMPTY_SCORE` | error | All voices quantized to zero blocks. |
 | `SFX_BUDGET_EXCEEDED` | error | Tune needs more than 64 SFX slots. |
+| `ARP_GRID_INFEASIBLE` | error | Arp chord onsets/durations don't share a 4-slot-aligned grid (or the grid would go finer than a 32nd note). Adjust note placements or chord durations. |
 | `CONTENT_AFTER_REPEAT` | warn | Notes after `:\|` are dropped; pico-8 loops indefinitely so they would never play. |
 | `SPEED_CLAMPED` | warn | Computed pico-8 speed fell outside [1, 255] and was clamped. |
 | `LOOP_ALIGNMENT` | warn | Repeat region couldn't be aligned to SFX block boundaries; loop dropped. |
@@ -92,6 +102,9 @@ Anything beyond these surfaces as one of the codes below.
 
 | Code | Severity | When it fires |
 |---|---|---|
+| `NO_VOICES` | error | Quantized score has no voices to emit. |
+| `CHANNEL_OVERFLOW` | error | The quantized score has more than 4 voices. Upstream stages should catch this; if it fires the IR was constructed inconsistently. |
+| `VOICE_BLOCK_MISMATCH` | error | Voices have different block counts after quantize. Internal invariant violation. |
 | `OUT_OF_RANGE` | error | A note is outside C2–D#7 and ±3 octaves of shifting can't bring it in. |
 | `OUT_OF_RANGE_TRANSPOSED` | info | A note was octave-shifted to fit within Pico-8's pitch range. |
 | `MERGE_OFFSET_INVALID` | error | `mergeIntoCart` was called with a negative offset, or `offset + rows > 64`. |
