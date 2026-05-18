@@ -6,6 +6,7 @@ import {
   abcToPico8,
   extractSection,
   formatDiagnosticText,
+  listSections,
   pico8ToAbc,
   unpackCart,
 } from '../src/index.js';
@@ -134,9 +135,54 @@ describe('pico8ToAbc — end-to-end on example carts', () => {
     const result = pico8ToAbc(cart);
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(result.diagnostics.some((d) => d.code === 'REVERSE_MULTI_SECTION')).toBe(true);
+    expect(result.sections).toHaveLength(2);
+    expect(result.decodedSection).toBe(0);
     // Forward pipeline accepts the truncated tune.
     const forward = abcToPico8(result.abc);
     expect(forward.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  });
+
+  it('decodes the requested section when section:N is passed', () => {
+    const sfxA = '011e0000' + '18050' + '00000'.repeat(31);
+    const sfxB = '011e0000' + '20050' + '00000'.repeat(31); // higher pitch so we can tell them apart
+    const cart =
+      `pico-8 cartridge // http://www.pico-8.com\n` +
+      `version 41\n` +
+      `__lua__\n` +
+      `__sfx__\n${sfxA}\n${sfxB}\n` +
+      `__music__\n` +
+      `01 00414243\n` +
+      `02 00414243\n` +
+      `01 01414243\n` +
+      `02 01414243\n`;
+    const list = listSections(cart);
+    expect(list.sections).toHaveLength(2);
+    expect(list.sections[0]).toMatchObject({ index: 0, startRow: 0, endRow: 1 });
+    expect(list.sections[1]).toMatchObject({ index: 1, startRow: 2, endRow: 3 });
+
+    const s0 = pico8ToAbc(cart, { section: 0 });
+    const s1 = pico8ToAbc(cart, { section: 1 });
+    expect(s0.decodedSection).toBe(0);
+    expect(s1.decodedSection).toBe(1);
+    // The two sections use different SFX pitches, so the emitted ABC should
+    // differ — proving we actually decoded section 1, not section 0.
+    expect(s0.abc).not.toEqual(s1.abc);
+  });
+
+  it('falls back to section 0 with REVERSE_SECTION_OUT_OF_RANGE on a bad index', () => {
+    const sfxLine = '011e0000' + '18050' + '00000'.repeat(31);
+    const cart =
+      `pico-8 cartridge // http://www.pico-8.com\n` +
+      `version 41\n` +
+      `__lua__\n` +
+      `__sfx__\n${sfxLine}\n` +
+      `__music__\n` +
+      `02 00414243\n`;
+    const result = pico8ToAbc(cart, { section: 7 });
+    expect(result.decodedSection).toBe(0);
+    expect(
+      result.diagnostics.some((d) => d.code === 'REVERSE_SECTION_OUT_OF_RANGE'),
+    ).toBe(true);
   });
 });
 

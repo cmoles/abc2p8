@@ -462,12 +462,12 @@ formatter.
   drum-chord sibling voices that only carry 1–2 drum letters still
   resolve as drum voices. The alternative (≥3) leaks per-hit volume
   on chord siblings, breaking the round-trip.
-- Multi-section carts (multiple begin/end-loop pairs, i.e. several
-  songs selectable via `music(N)`) decode only the first section.
-  `REVERSE_MULTI_SECTION` warns when this kicks in. Concatenating all
-  sections would typically blow past the 64-SFX-slot budget on the
-  round-trip and isn't expressible in ABC anyway (one `|: :|` region
-  per tune).
+- Multi-section carts (several songs selectable via `music(N)`) decode
+  one section at a time. The caller picks via `section: N` (default 0);
+  `result.sections` enumerates what's available, and the CLI exposes
+  `--section N` and `--list-sections`. Concatenating sections would
+  blow past the 64-SFX-slot budget and isn't expressible in ABC anyway
+  (one `|: :|` region per tune).
 - Sustained drum hits get over-segmented into per-slot 1-slot notes
   in the IR. This is intentional: forward emit stamps the kit tuple
   on every slot anyway, so the cart bytes are identical — the IR

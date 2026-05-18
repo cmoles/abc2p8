@@ -13,7 +13,12 @@ import {
   type BuiltInKitName,
   type Kit,
 } from './pico8/kits.js';
-import { dequantize, flagUnknownEffects } from './pipeline/dequantize.js';
+import {
+  dequantize,
+  detectSections,
+  flagUnknownEffects,
+  type SectionInfo,
+} from './pipeline/dequantize.js';
 import { quantize } from './pipeline/quantize.js';
 import { unpackCart } from './pico8/unpack.js';
 
@@ -39,6 +44,8 @@ export { BUILT_IN_KITS, HYBRID_KIT, NOISE_KIT, TONAL_KIT } from './pico8/kits.js
 export type { BuiltInKitName, DrumName, Kit } from './pico8/kits.js';
 export { inspect, renderPianoRoll } from './inspect.js';
 export { unpackCart } from './pico8/unpack.js';
+export { detectSections } from './pipeline/dequantize.js';
+export type { SectionInfo } from './pipeline/dequantize.js';
 export type {
   FindingCode,
   InspectionFinding,
@@ -235,6 +242,10 @@ export interface Pico8ToAbcOptions {
   // Title to stamp into the ABC header (`T:`). Cart bytes carry no title, so
   // we accept one from the caller (CLI passes the input filename's stem).
   title?: string;
+  // 0-based section index (default 0). A section is a contiguous music-row
+  // run bounded by end-loop/stop, matching what Pico-8's music(N) would
+  // play. Use `listSections(p8)` to enumerate available sections.
+  section?: number;
 }
 
 export interface Pico8ToAbcResult {
@@ -244,16 +255,33 @@ export interface Pico8ToAbcResult {
   // effect 7, the caller should run `abcToPico8` with arpSpeed: 'slow' to
   // reproduce the original timbre. Absent when no chord notes were detected.
   arpSpeed?: 'fast' | 'slow';
+  // Every section the cart exposes (not just the decoded one). Lets a UI
+  // surface a picker without re-parsing the cart.
+  sections: SectionInfo[];
+  // Which section index ended up in `abc`. May differ from
+  // `opts.section` if the requested index was out of range.
+  decodedSection: number;
 }
 
 export function pico8ToAbc(p8: string, opts: Pico8ToAbcOptions = {}): Pico8ToAbcResult {
   const diagnostics = new Diagnostics();
   const cart = unpackCart(p8, diagnostics);
-  if (!cart) return { abc: '', diagnostics: diagnostics.list() };
+  if (!cart) {
+    return { abc: '', diagnostics: diagnostics.list(), sections: [], decodedSection: 0 };
+  }
   flagUnknownEffects(cart, diagnostics);
 
-  const decoded = dequantize(cart, diagnostics);
-  if (!decoded) return { abc: '', diagnostics: diagnostics.list() };
+  const decoded = dequantize(cart, diagnostics, {
+    ...(opts.section !== undefined ? { section: opts.section } : {}),
+  });
+  if (!decoded) {
+    return {
+      abc: '',
+      diagnostics: diagnostics.list(),
+      sections: detectSections(cart.music),
+      decodedSection: 0,
+    };
+  }
 
   if (opts.title) decoded.score.meta.title = opts.title;
 
@@ -268,7 +296,18 @@ export function pico8ToAbc(p8: string, opts: Pico8ToAbcOptions = {}): Pico8ToAbc
     abc,
     diagnostics: diagnostics.list(),
     ...(arpSpeed ? { arpSpeed } : {}),
+    sections: decoded.sections,
+    decodedSection: decoded.decodedSection,
   };
+}
+
+// Standalone section enumeration. Useful when a UI wants to render a track
+// picker before the user has committed to decoding a particular section.
+export function listSections(p8: string): { sections: SectionInfo[]; diagnostics: readonly Diagnostic[] } {
+  const diagnostics = new Diagnostics();
+  const cart = unpackCart(p8, diagnostics);
+  if (!cart) return { sections: [], diagnostics: diagnostics.list() };
+  return { sections: detectSections(cart.music), diagnostics: diagnostics.list() };
 }
 
 function detectArpSpeed(cart: ReturnType<typeof unpackCart> & object): 'fast' | 'slow' | undefined {

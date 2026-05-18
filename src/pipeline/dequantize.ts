@@ -57,16 +57,108 @@ export interface DequantizeResult {
   // formatting; not part of the Score IR itself.
   slotsPerUnit: number;
   lDen: number;
+  sections: SectionInfo[];
+  decodedSection: number;
 }
 
-export function dequantize(cart: UnpackedCart, diagnostics: Diagnostics): DequantizeResult | null {
+export interface DequantizeOptions {
+  // 0-based section index. A section is a contiguous run of music rows
+  // bounded by an end-loop or stop flag (or the last non-silent row of the
+  // cart). Defaults to 0 (the first track Pico-8 plays via music(0)).
+  section?: number;
+}
+
+export interface SectionInfo {
+  index: number;
+  startRow: number;
+  endRow: number;
+  // Whether any channel in any of this section's rows is non-silent.
+  hasContent: boolean;
+}
+
+export function detectSections(music: Pico8MusicPattern[]): SectionInfo[] {
+  // A track ends on end-loop or stop; the next track starts at the
+  // following row. Trailing rows after the last terminator that still
+  // carry non-silent content form one additional implicit track.
+  const sections: SectionInfo[] = [];
+  const hasContent = (start: number, end: number): boolean => {
+    for (let r = start; r <= end; r += 1) {
+      if (music[r]!.channels.some((c) => c !== 'silent')) return true;
+    }
+    return false;
+  };
+  let start = 0;
+  for (let r = 0; r < music.length; r += 1) {
+    const m = music[r]!;
+    if (m.endLoop || m.stop) {
+      sections.push({
+        index: sections.length,
+        startRow: start,
+        endRow: r,
+        hasContent: hasContent(start, r),
+      });
+      start = r + 1;
+    }
+  }
+  if (start < music.length) {
+    let lastNonSilent = start - 1;
+    for (let r = start; r < music.length; r += 1) {
+      if (music[r]!.channels.some((c) => c !== 'silent')) lastNonSilent = r;
+    }
+    if (lastNonSilent >= start) {
+      sections.push({
+        index: sections.length,
+        startRow: start,
+        endRow: lastNonSilent,
+        hasContent: true,
+      });
+    }
+  }
+  return sections;
+}
+
+export function dequantize(
+  cart: UnpackedCart,
+  diagnostics: Diagnostics,
+  opts: DequantizeOptions = {},
+): DequantizeResult | null {
   if (cart.music.length === 0) {
     diagnostics.error('parse', 'REVERSE_TARGET_INVALID', 'Cart has no __music__ rows to play.');
     return null;
   }
 
-  const channelTimelines = buildChannelTimelines(cart, diagnostics);
+  const sections = detectSections(cart.music);
+  const playable = sections.filter((s) => s.hasContent);
+  if (playable.length === 0) {
+    diagnostics.error(
+      'parse',
+      'REVERSE_TARGET_INVALID',
+      'Cart has no non-silent music rows — nothing to convert.',
+    );
+    return null;
+  }
+
+  let chosen = opts.section ?? 0;
+  if (chosen < 0 || chosen >= playable.length) {
+    diagnostics.warn(
+      'parse',
+      'REVERSE_SECTION_OUT_OF_RANGE',
+      `Requested section ${chosen} but cart has ${playable.length} playable section(s); falling back to section 0.`,
+    );
+    chosen = 0;
+  }
+  const section = playable[chosen]!;
+
+  const channelTimelines = buildChannelTimelines(cart, section, diagnostics);
   if (!channelTimelines) return null;
+
+  if (sections.length > 1 && opts.section === undefined) {
+    diagnostics.info(
+      'parse',
+      'REVERSE_MULTI_SECTION',
+      `Cart has ${sections.length} sections; decoded section 0 (rows ${section.startRow}–${section.endRow}). Pass section: N to pick a different track.`,
+    );
+  }
 
   // Channels with at least one onset across the played sequence become voices.
   const usedChannels: number[] = [];
@@ -175,6 +267,8 @@ export function dequantize(cart: UnpackedCart, diagnostics: Diagnostics): Dequan
     voiceMeta,
     slotsPerUnit: gcdSlots,
     lDen,
+    sections,
+    decodedSection: section.index,
   };
 }
 
@@ -194,6 +288,7 @@ interface ChannelTimelines {
 
 function buildChannelTimelines(
   cart: UnpackedCart,
+  section: SectionInfo,
   diagnostics: Diagnostics,
 ): ChannelTimelines | null {
   const slots: Pico8Note[][] = Array.from({ length: CHANNEL_COUNT }, () => []);
@@ -203,23 +298,7 @@ function buildChannelTimelines(
   const sfxChannelBinding = new Map<number, number>(); // sfx idx -> first channel
   const ambiguousReported = new Set<number>();
 
-  // Multi-section music (carts that play different songs via several
-  // music() calls) shows up as multiple begin-loop / end-loop pairs in the
-  // sequence. The forward path can only express one |: :| region, so cap
-  // the decode at the end of the first section and warn. Without this the
-  // reverse path concatenates every section into one mega-tune that
-  // typically blows past the 64-SFX-slot budget on round-trip.
-  const sectionEnd = detectFirstSectionEnd(cart.music);
-  const lastRow = sectionEnd !== null ? sectionEnd.endRow : cart.music.length - 1;
-  if (sectionEnd?.multiSection) {
-    diagnostics.warn(
-      'parse',
-      'REVERSE_MULTI_SECTION',
-      `Cart has multiple loop sections (begin/end-loop pairs); decoding only rows 0–${sectionEnd.endRow}. Edit the source cart to extract a single section if a different one is desired.`,
-    );
-  }
-
-  for (let r = 0; r <= lastRow && r < cart.music.length; r += 1) {
+  for (let r = section.startRow; r <= section.endRow && r < cart.music.length; r += 1) {
     const row = cart.music[r]!;
     rowStartSlot.push(slots[0]!.length);
 
@@ -284,37 +363,9 @@ function buildChannelTimelines(
   }
 
   // Slice the music array so resolveLoopRegion sees only the section we
-  // decoded; otherwise it could grab a begin/end-loop pair from a later
-  // (truncated) section.
-  const playedMusic = cart.music.slice(0, rowStartSlot.length);
+  // decoded; otherwise it could grab a begin/end-loop pair from outside.
+  const playedMusic = cart.music.slice(section.startRow, section.startRow + rowStartSlot.length);
   return { slots, rowStartSlot, rowLength, music: playedMusic, playedSfxIds };
-}
-
-interface SectionEnd {
-  endRow: number;
-  multiSection: boolean;
-}
-
-function detectFirstSectionEnd(music: Pico8MusicPattern[]): SectionEnd | null {
-  // A "section" is everything from the start (or first begin-loop) through
-  // the matching end-loop. If we see another begin-loop AFTER the first
-  // end-loop, the cart is multi-section.
-  let firstEnd: number | null = null;
-  let multi = false;
-  for (let r = 0; r < music.length; r += 1) {
-    const m = music[r]!;
-    if (m.endLoop && firstEnd === null) firstEnd = r;
-    else if (m.beginLoop && firstEnd !== null && r > firstEnd) {
-      multi = true;
-      break;
-    }
-    if (m.stop) {
-      if (firstEnd === null) firstEnd = r;
-      break;
-    }
-  }
-  if (firstEnd === null) return null;
-  return { endRow: firstEnd, multiSection: multi };
 }
 
 function effectiveSfxLength(sfx: Pico8Sfx): number {

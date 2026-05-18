@@ -25,6 +25,8 @@ const playerHost = document.getElementById('player-host') as HTMLDivElement;
 const voiceInstrumentsHost = document.getElementById('voice-instruments') as HTMLDivElement;
 const voiceInstrumentsList = document.getElementById('voice-instruments-list') as HTMLDivElement;
 const loadCartInput = document.getElementById('load-cart') as HTMLInputElement;
+const sectionPicker = document.getElementById('section-picker') as HTMLSelectElement;
+const sectionPickerLabel = document.getElementById('section-picker-label') as HTMLLabelElement;
 const mergeFileInput = document.getElementById('merge-file') as HTMLInputElement;
 const mergeSfxInput = document.getElementById('merge-sfx-at') as HTMLInputElement;
 const mergeMusicInput = document.getElementById('merge-music-at') as HTMLInputElement;
@@ -82,6 +84,12 @@ examplesSelect.addEventListener('change', () => {
     // Different example, different voice layout — start fresh.
     voiceInstruments.clear();
     voiceDrumKits.clear();
+    // Clear the section picker too; sections are a property of a loaded
+    // cart, not of an ABC example.
+    loadedCartText = null;
+    loadedCartTitle = null;
+    sectionPickerLabel.hidden = true;
+    sectionPicker.innerHTML = '';
   }
 });
 
@@ -183,35 +191,71 @@ downloadBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+// Sticky context for the section-picker: when the user re-picks a section
+// we re-decode from the same cart bytes rather than asking them to re-upload.
+let loadedCartText: string | null = null;
+let loadedCartTitle: string | null = null;
+
+async function decodeAndConvertSection(section: number): Promise<void> {
+  if (loadedCartText === null) return;
+  const reversed = pico8ToAbc(loadedCartText, {
+    section,
+    ...(loadedCartTitle !== null ? { title: loadedCartTitle } : {}),
+  });
+  if (reversed.diagnostics.some((d) => d.severity === 'error')) {
+    renderDiagnostics(diagnosticsList, reversed.diagnostics.slice());
+    return;
+  }
+  abcInput.value = reversed.abc;
+  voiceInstruments.clear();
+  voiceDrumKits.clear();
+  if (reversed.arpSpeed === 'slow') chordArpToggle.checked = true;
+  renderSectionPicker(reversed.sections, reversed.decodedSection);
+  if (reversed.diagnostics.length > 0) {
+    renderDiagnostics(diagnosticsList, reversed.diagnostics.slice());
+    for (const d of reversed.diagnostics) {
+      if (d.severity === 'warn' || d.severity === 'error') {
+        console.warn(formatDiagnosticText(d));
+      }
+    }
+  }
+  await convert();
+}
+
+function renderSectionPicker(
+  sections: readonly { index: number; startRow: number; endRow: number; hasContent: boolean }[],
+  selected: number,
+): void {
+  const playable = sections.filter((s) => s.hasContent);
+  if (playable.length <= 1) {
+    sectionPickerLabel.hidden = true;
+    sectionPicker.innerHTML = '';
+    return;
+  }
+  sectionPickerLabel.hidden = false;
+  sectionPicker.innerHTML = '';
+  for (const s of playable) {
+    const opt = document.createElement('option');
+    opt.value = String(s.index);
+    const range = s.startRow === s.endRow ? `row ${s.startRow}` : `rows ${s.startRow}–${s.endRow}`;
+    opt.textContent = `Section ${s.index} (${range})`;
+    if (s.index === selected) opt.selected = true;
+    sectionPicker.appendChild(opt);
+  }
+}
+
+sectionPicker.addEventListener('change', () => {
+  const next = Number(sectionPicker.value);
+  if (Number.isInteger(next)) void decodeAndConvertSection(next);
+});
+
 loadCartInput.addEventListener('change', async () => {
   const file = loadCartInput.files?.[0];
   if (!file) return;
   try {
-    const text = await file.text();
-    const reversed = pico8ToAbc(text, { title: file.name.replace(/\.p8(\.png)?$/i, '') });
-    if (reversed.diagnostics.some((d) => d.severity === 'error')) {
-      // Surface errors in the diagnostics panel without overwriting the ABC.
-      const items: Diagnostic[] = reversed.diagnostics.slice();
-      renderDiagnostics(diagnosticsList, items);
-      return;
-    }
-    abcInput.value = reversed.abc;
-    // Different cart, fresh voice config.
-    voiceInstruments.clear();
-    voiceDrumKits.clear();
-    if (reversed.arpSpeed === 'slow') chordArpToggle.checked = true;
-    // Surface info/warn diagnostics from the reverse step, then re-run the
-    // forward pipeline so the player picks up the loaded cart immediately.
-    if (reversed.diagnostics.length > 0) {
-      // Pre-stamp the diagnostics so the convert call can append its own.
-      renderDiagnostics(diagnosticsList, reversed.diagnostics.slice());
-      for (const d of reversed.diagnostics) {
-        if (d.severity === 'warn' || d.severity === 'error') {
-          console.warn(formatDiagnosticText(d));
-        }
-      }
-    }
-    await convert();
+    loadedCartText = await file.text();
+    loadedCartTitle = file.name.replace(/\.p8(\.png)?$/i, '');
+    await decodeAndConvertSection(0);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     diagnosticsList.innerHTML = '';

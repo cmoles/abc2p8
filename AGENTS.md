@@ -244,9 +244,11 @@ CLI: `npm run convert <input.abc> -o <out.p8>`. Flags:
 ## Reverse direction: `.p8` → ABC
 
 ```ts
-import { pico8ToAbc } from 'abc2p8';
+import { pico8ToAbc, listSections } from 'abc2p8';
 
-const { abc, diagnostics, arpSpeed } = pico8ToAbc(cartText, { title: 'mytune' });
+const tracks = listSections(cartText).sections; // [{ index, startRow, endRow, hasContent }, ...]
+const { abc, diagnostics, arpSpeed, sections, decodedSection } =
+  pico8ToAbc(cartText, { title: 'mytune', section: 0 });
 ```
 
 CLI: `npm run reverse <input.p8> -o <output.abc>`. Reads a `.p8` cart and
@@ -258,16 +260,22 @@ collapsed into ABC chord notation (`[CEG]`). `arpSpeed` in the result is
 preserve it on the round-trip. Non-default kits emit a `% pico8 kit V N`
 comment so the user knows which `--kit` flag to use.
 
+Multi-section carts (multiple `music(N)` entry points) expose each track
+in `result.sections`; pass `section: N` to decode a different one. The
+CLI exposes `--section N` and `--list-sections` to enumerate without
+converting. Cross-channel SFX sharing still can't round-trip (no ABC
+equivalent) — only one section at a time, and only the slot-tuple
+features the forward path authors.
+
 Diagnostics: `REVERSE_TARGET_INVALID` (error), `REVERSE_MULTI_SECTION`
-(warn, cart has multiple begin/end-loop pairs and only the first section
-is decoded), `REVERSE_UNKNOWN_EFFECT` (warn, slide/vibrato/drop),
-`REVERSE_FEATURE_DROPPED` (warn, e.g. mixed waveforms within a melodic
-voice or out-of-range SFX byte fields), `REVERSE_NONSTANDARD_DRUM`
+(info, cart has multiple tracks and one was auto-picked),
+`REVERSE_SECTION_OUT_OF_RANGE` (warn, requested section index doesn't
+exist; fell back to 0), `REVERSE_UNKNOWN_EFFECT` (warn, slide/vibrato/
+drop), `REVERSE_FEATURE_DROPPED` (warn, e.g. mixed waveforms within a
+melodic voice or out-of-range SFX byte fields), `REVERSE_NONSTANDARD_DRUM`
 (info, drum-like voice that didn't match a built-in kit),
 `REVERSE_AMBIGUOUS_SFX` (info, same SFX index referenced from multiple
-channels). Tracker-authored carts with cross-channel SFX sharing and
-multiple `music()` entry points won't round-trip — those features have
-no ABC equivalent.
+channels).
 
 ## Inspecting before you ship
 
